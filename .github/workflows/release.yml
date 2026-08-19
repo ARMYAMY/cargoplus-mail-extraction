@@ -1,0 +1,129 @@
+name: Release & Artifacts Publishing
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag (e.g. v1.0.0)"
+        required: true
+        default: "v1.0.0"
+      release_title:
+        description: "Release Title"
+        required: false
+        default: "CargoPlus Release"
+      is_prerelease:
+        description: "Mark as Pre-release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  test:
+    name: Pre-Release Automated Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install System Dependencies (libGL for OCR & OpenCV)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libglib2.0-0
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run Pytest Test Suite
+        run: |
+          pytest -v
+
+  release:
+    name: Build & Publish Release
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine Release Tag
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "TAG_NAME=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+            echo "RELEASE_TITLE=${{ github.event.inputs.release_title }}" >> $GITHUB_OUTPUT
+            echo "IS_PRERELEASE=${{ github.event.inputs.is_prerelease }}" >> $GITHUB_OUTPUT
+          else
+            TAG=${GITHUB_REF#refs/tags/}
+            echo "TAG_NAME=${TAG}" >> $GITHUB_OUTPUT
+            echo "RELEASE_TITLE=CargoPlus ${TAG}" >> $GITHUB_OUTPUT
+            echo "IS_PRERELEASE=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Package Deployment Bundle
+        run: |
+          VERSION="${{ steps.vars.outputs.TAG_NAME }}"
+          mkdir -p dist
+          tar -czf "dist/cargoplus-${VERSION}-deploy.tar.gz" \
+            --exclude='.git' \
+            --exclude='.pytest_cache' \
+            --exclude='__pycache__' \
+            --exclude='.venv' \
+            --exclude='dist' \
+            .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.TAG_NAME }}
+          name: ${{ steps.vars.outputs.RELEASE_TITLE }}
+          draft: false
+          prerelease: ${{ steps.vars.outputs.IS_PRERELEASE == 'true' }}
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to GitHub Container Registry (GHCR)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Set up Docker Buildx
+        uses: actions/setup-buildx-action@v3
+
+      - name: Build & Push Release Docker Image to GHCR
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ steps.vars.outputs.TAG_NAME }}
+            ghcr.io/${{ github.repository }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+        continue-on-error: true
