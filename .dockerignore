@@ -1,0 +1,14 @@
+.git
+.venv
+__pycache__
+.pytest_cache
+.ruff_cache
+data/*.db
+data/backups
+data/uploads
+.env
+.env.*
+deploy/cloud/.env
+deploy/cloud/Caddyfile.active
+deploy/cloud/secrets
+*.log

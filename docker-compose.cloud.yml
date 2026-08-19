@@ -1,0 +1,332 @@
+name: cargoplus-cloud
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+x-app-environment: &app-environment
+  ENVIRONMENT: production
+  DEBUG: "false"
+  HOST: 0.0.0.0
+  DATABASE_URL_FILE: /run/secrets/database_url
+  CELERY_BROKER_URL_FILE: /run/secrets/celery_broker_url
+  CELERY_RESULT_BACKEND_FILE: /run/secrets/celery_result_backend
+  REDIS_PASSWORD_FILE: /run/secrets/redis_password
+  TASK_QUEUE_MODE: celery
+  CELERY_QUEUE_NAME: cargo-extraction
+  CELERY_WEBHOOK_QUEUE_NAME: cargo-webhooks
+  WORKER_CONCURRENCY: ${CELERY_WORKER_CONCURRENCY:-2}
+  DEFAULT_TENANT_CONCURRENCY: ${DEFAULT_TENANT_CONCURRENCY:-2}
+  MAX_TENANT_PENDING_TASKS: ${MAX_TENANT_PENDING_TASKS:-200}
+  MAX_GLOBAL_PENDING_TASKS: ${MAX_GLOBAL_PENDING_TASKS:-1000}
+  TASK_LEASE_SECONDS: ${TASK_LEASE_SECONDS:-600}
+  TASK_RECOVERY_INTERVAL_SECONDS: ${TASK_RECOVERY_INTERVAL_SECONDS:-30}
+  TASK_DISPATCH_STALE_SECONDS: ${TASK_DISPATCH_STALE_SECONDS:-120}
+  LLM_API_KEY_FILE: /run/secrets/llm_api_key
+  LLM_BASE_URL: ${LLM_BASE_URL:?set LLM_BASE_URL}
+  LLM_MODEL: ${LLM_MODEL:?set LLM_MODEL}
+  LLM_FALLBACK_MODEL: ${LLM_FALLBACK_MODEL:-}
+  LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-120}
+  LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
+  ADMIN_SECRET_KEY_FILE: /run/secrets/admin_secret
+  SESSION_SECRET_KEY_FILE: /run/secrets/session_secret
+  AUTH_TOKEN_TTL_SECONDS: ${AUTH_TOKEN_TTL_SECONDS:-14400}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?set CORS_ALLOWED_ORIGINS}
+  ALLOWED_HOSTS: ${ALLOWED_HOSTS:?set ALLOWED_HOSTS}
+  TRUST_PROXY_HEADERS: "true"
+  ALLOW_LEGACY_ADMIN_SECRET_AUTH: "false"
+  AUTH_RATE_LIMIT_ENABLED: "true"
+  SKILL_V3_PATH: /opt/cargo-mail-extraction-skill-v3
+  UPLOAD_DIR: /app/data/uploads
+  DATA_RETENTION_DAYS: ${DATA_RETENTION_DAYS:-90}
+  SEED_DEMO_TENANT: "false"
+  METRICS_ENABLED: "false"
+
+x-app-secrets: &app-secrets
+  - database_url
+  - celery_broker_url
+  - celery_result_backend
+  - redis_password
+  - llm_api_key
+  - admin_secret
+  - session_secret
+
+x-app-hardening: &app-hardening
+  image: ${CARGOPLUS_IMAGE:-cargoplus-app:cloud}
+  restart: unless-stopped
+  init: true
+  read_only: true
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs:
+    - /tmp:size=512m,mode=1777
+  networks: [edge, data]
+  logging: *default-logging
+  mem_limit: ${APP_MEMORY_LIMIT:-2g}
+  cpus: ${APP_CPU_LIMIT:-2.0}
+  pids_limit: 512
+
+services:
+  postgres:
+    image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cargo
+      POSTGRES_USER: cargo
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [data]
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cargo -d cargo"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: ${POSTGRES_MEMORY_LIMIT:-2g}
+    cpus: ${POSTGRES_CPU_LIMIT:-2.0}
+    pids_limit: 256
+
+  redis:
+    image: redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+    restart: unless-stopped
+    command:
+      - sh
+      - -ec
+      - exec redis-server --appendonly yes --appendfsync everysec --save 900 1 --save 300 10 --requirepass "$$(tr -d '\r\n' < /run/secrets/redis_password)"
+    secrets: [redis_password]
+    volumes:
+      - redis_data:/data
+    networks: [data]
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$(tr -d '\r\n' < /run/secrets/redis_password) redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: ${REDIS_MEMORY_LIMIT:-1g}
+    cpus: ${REDIS_CPU_LIMIT:-1.0}
+    pids_limit: 128
+
+  api:
+    <<: *app-hardening
+    build:
+      context: ..
+      dockerfile: cargo_service/Dockerfile
+    environment: *app-environment
+    secrets: *app-secrets
+    volumes:
+      - uploads_data:/app/data/uploads
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
+  worker:
+    <<: *app-hardening
+    command: ["sh", "-c", "celery -A app.celery_app:celery_app worker --loglevel=INFO --concurrency=$${WORKER_CONCURRENCY} --queues=$${CELERY_QUEUE_NAME}"]
+    environment: *app-environment
+    secrets: *app-secrets
+    volumes:
+      - uploads_data:/app/data/uploads
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    stop_grace_period: 7m
+    mem_limit: ${WORKER_MEMORY_LIMIT:-4g}
+    cpus: ${WORKER_CPU_LIMIT:-4.0}
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app:celery_app inspect ping --destination=celery@$${HOSTNAME} --timeout=3 | grep -q pong"]
+      interval: 30s
+      timeout: 8s
+      retries: 4
+      start_period: 40s
+
+  webhook-worker:
+    <<: *app-hardening
+    command: ["sh", "-c", "celery -A app.celery_app:celery_app worker --loglevel=INFO --concurrency=${CELERY_WEBHOOK_CONCURRENCY:-1} --queues=$${CELERY_WEBHOOK_QUEUE_NAME}"]
+    environment: *app-environment
+    secrets: *app-secrets
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    stop_grace_period: 1m
+    mem_limit: ${WEBHOOK_WORKER_MEMORY_LIMIT:-1g}
+    cpus: ${WEBHOOK_WORKER_CPU_LIMIT:-1.0}
+
+  beat:
+    <<: *app-hardening
+    command: ["celery", "-A", "app.celery_app:celery_app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
+    environment: *app-environment
+    secrets: *app-secrets
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    stop_grace_period: 30s
+    mem_limit: 512m
+    cpus: 0.5
+
+  caddy:
+    image: caddy:2.11.2-alpine@sha256:834468128c7696cec0ceea6172f7d692daf645ae51983ca76e39da54a97c570d
+    restart: unless-stopped
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?set PUBLIC_HOST}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    ports:
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+      - "0.0.0.0:443:443/udp"
+    volumes:
+      - ./deploy/cloud/Caddyfile.active:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [edge]
+    logging: *default-logging
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    cpus: 1.0
+    pids_limit: 128
+
+  postgres-backup:
+    image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+    restart: unless-stopped
+    environment:
+      POSTGRES_BACKUP_URL_FILE: /run/secrets/postgres_backup_url
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+    command: ["sh", "/opt/cargoplus/postgres_backup.sh"]
+    secrets: [postgres_backup_url]
+    volumes:
+      - ./scripts/postgres_backup.sh:/opt/cargoplus/postgres_backup.sh:ro
+      - type: bind
+        source: ${CLOUD_BACKUP_DIR:?set CLOUD_BACKUP_DIR}
+        target: /backups
+    networks: [data]
+    logging: *default-logging
+    depends_on:
+      postgres: {condition: service_healthy}
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 128
+
+  redis-backup:
+    image: redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+    command: ["sh", "/opt/cargoplus/redis_backup.sh"]
+    secrets: [redis_password]
+    volumes:
+      - ./scripts/redis_backup.sh:/opt/cargoplus/redis_backup.sh:ro
+      - type: bind
+        source: ${CLOUD_BACKUP_DIR:?set CLOUD_BACKUP_DIR}
+        target: /backups
+    networks: [data]
+    logging: *default-logging
+    depends_on:
+      redis: {condition: service_healthy}
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 128
+
+  restore-db:
+    image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+    profiles: ["restore-drill"]
+    environment:
+      POSTGRES_DB: cargo_restore
+      POSTGRES_USER: cargo_restore
+      POSTGRES_PASSWORD_FILE: /run/secrets/restore_drill_password
+    secrets: [restore_drill_password]
+    tmpfs:
+      - /var/lib/postgresql/data:size=2g
+    networks: [restore]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U cargo_restore -d cargo_restore"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  restore-drill:
+    image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+    profiles: ["restore-drill"]
+    environment:
+      BACKUP_DIR: /backups
+      PGHOST: restore-db
+      PGPORT: 5432
+      PGUSER: cargo_restore
+      PGDATABASE: cargo_restore
+      POSTGRES_PASSWORD_FILE: /run/secrets/restore_drill_password
+    command: ["sh", "/opt/cargoplus/postgres_restore_drill.sh"]
+    secrets: [restore_drill_password]
+    volumes:
+      - ./scripts/postgres_restore_drill.sh:/opt/cargoplus/postgres_restore_drill.sh:ro
+      - type: bind
+        source: ${CLOUD_BACKUP_DIR:?set CLOUD_BACKUP_DIR}
+        target: /backups
+    networks: [restore]
+    depends_on:
+      restore-db: {condition: service_healthy}
+    security_opt: ["no-new-privileges:true"]
+
+networks:
+  edge:
+  data:
+    internal: true
+  restore:
+    internal: true
+
+volumes:
+  postgres_data:
+  redis_data:
+  uploads_data:
+  caddy_data:
+  caddy_config:
+
+secrets:
+  postgres_password:
+    file: ./deploy/cloud/secrets/postgres_password
+  database_url:
+    file: ./deploy/cloud/secrets/database_url
+  postgres_backup_url:
+    file: ./deploy/cloud/secrets/postgres_backup_url
+  celery_broker_url:
+    file: ./deploy/cloud/secrets/celery_broker_url
+  celery_result_backend:
+    file: ./deploy/cloud/secrets/celery_result_backend
+  redis_password:
+    file: ./deploy/cloud/secrets/redis_password
+  llm_api_key:
+    file: ./deploy/cloud/secrets/llm_api_key
+  admin_secret:
+    file: ./deploy/cloud/secrets/admin_secret
+  session_secret:
+    file: ./deploy/cloud/secrets/session_secret
+  restore_drill_password:
+    file: ./deploy/cloud/secrets/restore_drill_password

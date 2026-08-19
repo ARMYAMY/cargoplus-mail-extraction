@@ -1,0 +1,22 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "panels": [
+    {"type": "stat", "title": "Extraction queue", "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4}, "targets": [{"expr": "cargoplus_queue_depth{queue=\"cargo-extraction\"}"}]},
+    {"type": "stat", "title": "Extraction workers", "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4}, "targets": [{"expr": "cargoplus_celery_workers_online{queue=\"cargo-extraction\"}"}]},
+    {"type": "stat", "title": "Failed tasks (15m)", "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4}, "targets": [{"expr": "cargoplus_tasks_recent_15m{status=\"FAILED\"}"}]},
+    {"type": "stat", "title": "Revenue (CNY)", "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4}, "targets": [{"expr": "cargoplus_revenue_total_yuan"}]},
+    {"type": "timeseries", "title": "API request rate", "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8}, "targets": [{"expr": "sum by (status) (rate(cargoplus_http_requests_total[5m]))", "legendFormat": "{{status}}"}]},
+    {"type": "timeseries", "title": "LLM outcomes", "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8}, "targets": [{"expr": "sum by (outcome) (increase(cargoplus_llm_attempts_total[5m]))", "legendFormat": "{{outcome}}"}]},
+    {"type": "timeseries", "title": "Queue depth", "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8}, "targets": [{"expr": "cargoplus_queue_depth", "legendFormat": "{{queue}}"}]},
+    {"type": "timeseries", "title": "Task status (15m)", "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8}, "targets": [{"expr": "cargoplus_tasks_recent_15m", "legendFormat": "{{status}}"}]}
+  ],
+  "schemaVersion": 39,
+  "tags": ["cargoplus"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "CargoPlus Production Overview",
+  "uid": "cargoplus-production",
+  "version": 1
+}

@@ -1,0 +1,111 @@
+groups:
+  - name: cargoplus-availability
+    rules:
+      - alert: CargoPlusApiDown
+        expr: up{job="cargoplus-api"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "CargoPlus API metrics target is down"
+
+      - alert: CargoPlusMonitorDown
+        expr: up{job="cargoplus-platform"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "CargoPlus platform exporter is down"
+
+      - alert: CargoPlusExtractionWorkerMissing
+        expr: cargoplus_celery_workers_online{queue="cargo-extraction"} < 1
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "No Celery extraction worker is consuming the queue"
+
+      - alert: CargoPlusWebhookWorkerMissing
+        expr: cargoplus_celery_workers_online{queue="cargo-webhooks"} < 1
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "No Celery webhook worker is consuming the queue"
+
+      - alert: CargoPlusBeatStalled
+        expr: cargoplus_celery_beat_tick_age_seconds < 0 or cargoplus_celery_beat_tick_age_seconds > 90
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "Celery Beat has not dispatched recovery scheduling for 90 seconds"
+
+  - name: cargoplus-capacity
+    rules:
+      - alert: CargoPlusQueueBacklogHigh
+        expr: cargoplus_queue_depth{queue="cargo-extraction"} > 500
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Extraction queue has exceeded 500 messages"
+
+      - alert: CargoPlusQueueBacklogCritical
+        expr: cargoplus_queue_depth{queue="cargo-extraction"} > 2000
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "Extraction queue has exceeded 2000 messages"
+
+      - alert: CargoPlusTaskFailureRateHigh
+        expr: sum(cargoplus_tasks_recent_15m{status="FAILED"}) / clamp_min(sum(cargoplus_tasks_recent_15m), 1) > 0.10
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Task failure rate has exceeded 10% for 10 minutes"
+
+      - alert: CargoPlusStaleTaskLease
+        expr: cargoplus_stale_task_leases > 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "One or more processing task leases have expired"
+
+      - alert: CargoPlusApiServerErrors
+        expr: sum(rate(cargoplus_http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(cargoplus_http_requests_total[5m])), 0.001) > 0.02
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "API 5xx ratio has exceeded 2%"
+
+  - name: cargoplus-upstream-and-backup
+    rules:
+      - alert: CargoPlusLlmRateLimited
+        expr: increase(cargoplus_llm_attempts_total{outcome="rate_limited"}[5m]) > 5
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: "LLM provider returned more than five HTTP 429 responses"
+
+      - alert: CargoPlusLlmLatencyHigh
+        expr: rate(cargoplus_llm_attempt_duration_seconds_sum[10m]) / clamp_min(rate(cargoplus_llm_attempt_duration_seconds_count[10m]), 0.001) > 45
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Average LLM attempt latency exceeds 45 seconds"
+
+      - alert: CargoPlusPostgresBackupMissing
+        expr: cargoplus_postgres_backup_age_seconds < 0 or cargoplus_postgres_backup_age_seconds > 93600
+        for: 10m
+        labels: {severity: critical}
+        annotations:
+          summary: "No verified PostgreSQL backup has completed in 26 hours"
+
+      - alert: CargoPlusRedisBackupMissing
+        expr: cargoplus_redis_backup_age_seconds < 0 or cargoplus_redis_backup_age_seconds > 93600
+        for: 10m
+        labels: {severity: critical}
+        annotations:
+          summary: "No verified Redis RDB backup has completed in 26 hours"
+
+      - alert: CargoPlusRestoreDrillOverdue
+        expr: cargoplus_postgres_restore_drill_age_seconds < 0 or cargoplus_postgres_restore_drill_age_seconds > 691200
+        for: 1h
+        labels: {severity: warning}
+        annotations:
+          summary: "PostgreSQL restore drill is missing or older than eight days"

@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>租户对账中心 · CargoPlus 货代邮件抽取平台</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/portal.css">
+  <script>
+    // Authentication Guard: Redirect to /login if not logged in
+    if (!localStorage.getItem('cargo_portal_api_key') && !localStorage.getItem('cargo_admin_token')) {
+      window.location.href = '/login';
+    }
+
+    function tenantLogout() {
+      localStorage.removeItem('cargo_portal_api_key');
+      localStorage.removeItem('cargo_admin_token');
+      window.location.href = '/login';
+    }
+  </script>
+
+</head>
+<body class="portal-page">
+  <div class="app-layout">
+    <header class="portal-topbar">
+      <div class="portal-topbar-inner">
+        <div class="portal-brand" aria-label="CargoPlus 对账中心">
+          <div class="portal-brand-mark" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+          </div>
+          <div class="portal-brand-copy">
+            <strong>CargoPlus</strong>
+            <span>企业对账中心</span>
+          </div>
+          <span class="portal-env-badge">租户自助端</span>
+        </div>
+
+        <div class="portal-topbar-actions">
+          <div id="portal-tenant-selector-group" class="portal-tenant-switcher" hidden>
+            <label for="portal-tenant-select">审查企业</label>
+            <select id="portal-tenant-select" class="form-control"></select>
+          </div>
+          <div id="portal-tenant-badge-group" class="portal-security-status" title="当前凭证只能读取本企业数据">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+            <span>企业数据已隔离</span>
+          </div>
+          <a href="/" class="btn btn-sm btn-secondary" id="btn-portal-to-admin" hidden title="切换回管理员控制台">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+            <span>管理总控台</span>
+          </a>
+          <button class="btn btn-sm portal-logout-btn" onclick="tenantLogout()" title="退出当前账户">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+            <span>退出</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+
+
+
+    <!-- Main Content Area -->
+    <main class="portal-main">
+      <section class="portal-hero" aria-labelledby="tenant-display-name">
+        <div class="portal-tenant-info">
+          <div class="portal-eyebrow">
+            <span class="portal-live-dot" aria-hidden="true"></span>
+            企业账户概览
+          </div>
+          <div class="portal-tenant-title-row">
+            <h1 id="tenant-display-name">加载中...</h1>
+            <span class="portal-tenant-id" id="tenant-display-id">-</span>
+          </div>
+          <div class="portal-tenant-meta" aria-label="企业账户信息">
+            <div class="portal-meta-item">
+              <span>成功调用费率</span>
+              <strong id="tenant-display-price">¥0.50</strong>
+            </div>
+            <div class="portal-meta-item">
+              <span>并发限额</span>
+              <strong><span id="tenant-display-concurrency">20</span> 并发</strong>
+            </div>
+            <div class="portal-meta-item portal-meta-email">
+              <span>联系邮箱</span>
+              <strong id="tenant-display-email">未设置</strong>
+            </div>
+          </div>
+        </div>
+        <div class="portal-balance-panel">
+          <div class="portal-balance-label">
+            <span>当前可用余额</span>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"></rect><path d="M16 12h4"></path><path d="M2 9h20"></path></svg>
+          </div>
+          <strong id="tenant-display-balance">¥0.00</strong>
+          <p>已扣除冻结中的任务预留金额</p>
+        </div>
+      </section>
+
+      <section class="portal-overview" aria-labelledby="overview-heading">
+        <div class="portal-section-heading">
+          <div>
+            <span class="portal-section-kicker">FINANCIAL SNAPSHOT</span>
+            <h2 id="overview-heading">收支概览</h2>
+          </div>
+          <p>汇总账户充值、消费和处理结果</p>
+        </div>
+        <div class="metrics-grid">
+          <article class="metric-card metric-card-recharge">
+            <div class="metric-header">
+              <span class="metric-title">累计充值</span>
+              <div class="metric-icon" aria-hidden="true">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+              </div>
+            </div>
+            <div class="metric-value" id="p-metric-recharge">¥0.00</div>
+            <div class="metric-footer">已完成入账的预付资金</div>
+          </article>
+
+          <article class="metric-card metric-card-deducted">
+            <div class="metric-header">
+              <span class="metric-title">累计消费</span>
+              <div class="metric-icon" aria-hidden="true">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"></path><path d="M7 12h10"></path><path d="M10 18h4"></path></svg>
+              </div>
+            </div>
+            <div class="metric-value" id="p-metric-deducted">¥0.00</div>
+            <div class="metric-footer">仅成功提取的任务按次扣除</div>
+          </article>
+
+          <article class="metric-card metric-card-success">
+            <div class="metric-header">
+              <span class="metric-title">成功抽取</span>
+              <div class="metric-icon" aria-hidden="true">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              </div>
+            </div>
+            <div class="metric-value" id="p-metric-success-tasks">0 封</div>
+            <div class="metric-footer">已生成 Cargo V3 结构化字段</div>
+          </article>
+
+          <article class="metric-card metric-card-failed">
+            <div class="metric-header">
+              <span class="metric-title">失败免扣费</span>
+              <div class="metric-icon" aria-hidden="true">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"></circle><line x1="9" y1="9" x2="15" y2="15"></line><line x1="15" y1="9" x2="9" y2="15"></line></svg>
+              </div>
+            </div>
+            <div class="metric-value" id="p-metric-failed-tasks">0 封</div>
+            <div class="metric-footer">处理失败任务自动执行零扣费</div>
+          </article>
+        </div>
+      </section>
+
+      <section class="portal-ledger" aria-labelledby="ledger-heading">
+        <div class="portal-section-heading portal-ledger-heading">
+          <div>
+            <span class="portal-section-kicker">RECONCILIATION LEDGER</span>
+            <h2 id="ledger-heading">对账明细</h2>
+          </div>
+          <p>账单、资金流水和邮件任务统一核验</p>
+        </div>
+
+      <!-- Navigation Tabs -->
+      <nav class="nav-tabs" role="tablist" aria-label="对账数据视图">
+        <button class="tab-btn active" id="tab-button-daily" type="button" role="tab" aria-selected="true" aria-controls="tab-daily-statement" data-tab="tab-daily-statement">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+          <span>按日对账汇总单</span>
+        </button>
+        <button class="tab-btn" id="tab-button-transactions" type="button" role="tab" aria-selected="false" aria-controls="tab-transactions" data-tab="tab-transactions" tabindex="-1">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+          <span>逐笔交易流水明细</span>
+        </button>
+        <button class="tab-btn" id="tab-button-tasks" type="button" role="tab" aria-selected="false" aria-controls="tab-task-history" data-tab="tab-task-history" tabindex="-1">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+          <span>邮件单证处理记录</span>
+        </button>
+      </nav>
+
+      <!-- Tab 1: Daily Statements -->
+      <section class="tab-content active" id="tab-daily-statement" role="tabpanel" aria-labelledby="tab-button-daily">
+        <div class="action-bar">
+          <div class="action-left">
+            <div class="portal-view-context">
+              <strong>最近 30 天</strong>
+              <span>按自然日汇总账户收支</span>
+            </div>
+          </div>
+          <div class="action-right">
+            <button class="btn btn-secondary" id="btn-export-csv">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              <span>导出 CSV 电子对账单</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="card table-card">
+          <div class="table-responsive">
+            <table class="data-table" id="table-daily-statement">
+              <thead>
+                <tr>
+                  <th>对账日期</th>
+                  <th>成功扣费调用数</th>
+                  <th>扣费金额 (元)</th>
+                  <th>充值入账笔数</th>
+                  <th>充值金额 (元)</th>
+                  <th>期末结存余额</th>
+                  <th>单次平均扣费</th>
+                  <th>对账状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td colspan="8" class="text-center text-muted py-8">加载中...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <!-- Daily Statements Pagination Bar -->
+          <div class="pagination-bar" id="portal-daily-pagination-bar" style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-top:1px solid var(--portal-border); background:rgba(0,0,0,0.15); border-radius:0 0 10px 10px;">
+            <div class="pagination-info" style="font-size:0.82rem; color:var(--portal-text-muted);">
+              共 <strong id="portal-daily-total-count" style="color:var(--portal-primary);">0</strong> 天账单 · 第 <span id="portal-daily-curr-page">1</span> / <span id="portal-daily-total-pages">1</span> 页
+            </div>
+            <div class="pagination-controls" style="display:flex; align-items:center; gap:8px;">
+              <select class="form-control" id="portal-daily-page-size" style="width:auto; padding:4px 8px; font-size:0.8rem; background:rgba(0,0,0,0.3); color:#fff; border:1px solid var(--portal-border); border-radius:6px;">
+                <option value="10" selected>10 天/页</option>
+                <option value="20">20 天/页</option>
+                <option value="30">30 天/页</option>
+              </select>
+              <button type="button" class="btn btn-xs btn-secondary" id="portal-daily-btn-prev">◀ 上一页</button>
+              <button type="button" class="btn btn-xs btn-secondary" id="portal-daily-btn-next">下一页 ▶</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab 2: Detailed Transaction Ledger -->
+      <section class="tab-content" id="tab-transactions" role="tabpanel" aria-labelledby="tab-button-transactions" hidden>
+        <div class="action-bar">
+          <div class="action-left">
+            <select class="select-filter" id="filter-tx-type" aria-label="筛选交易流水类型">
+              <option value="">全部流水类型</option>
+              <option value="DEDUCTION">API 扣费 (DEDUCTION)</option>
+              <option value="RECHARGE">账户充值 (RECHARGE)</option>
+            </select>
+          </div>
+          <div class="action-right">
+            <button class="btn btn-secondary" id="btn-export-tx-csv">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              <span>导出交易流水</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="card table-card">
+          <div class="table-responsive">
+            <table class="data-table" id="table-tx-details">
+              <thead>
+                <tr>
+                  <th>流水号 (TxID)</th>
+                  <th>业务类型</th>
+                  <th>变动金额 (元)</th>
+                  <th>变动前余额</th>
+                  <th>变动后余额</th>
+                  <th>关联任务号 (TaskID)</th>
+                  <th>说明与摘要</th>
+                  <th>交易时间</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td colspan="8" class="text-center text-muted py-8">加载中...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <!-- Transactions Pagination Bar -->
+          <div class="pagination-bar" id="portal-tx-pagination-bar" style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-top:1px solid var(--portal-border); background:rgba(0,0,0,0.15); border-radius:0 0 10px 10px;">
+            <div class="pagination-info" style="font-size:0.82rem; color:var(--portal-text-muted);">
+              共 <strong id="portal-tx-total-count" style="color:var(--portal-primary);">0</strong> 条流水 · 第 <span id="portal-tx-curr-page">1</span> / <span id="portal-tx-total-pages">1</span> 页
+            </div>
+            <div class="pagination-controls" style="display:flex; align-items:center; gap:8px;">
+              <select class="form-control" id="portal-tx-page-size" style="width:auto; padding:4px 8px; font-size:0.8rem; background:rgba(0,0,0,0.3); color:#fff; border:1px solid var(--portal-border); border-radius:6px;">
+                <option value="10" selected>10 条/页</option>
+                <option value="20">20 条/页</option>
+                <option value="50">50 条/页</option>
+              </select>
+              <button type="button" class="btn btn-xs btn-secondary" id="portal-tx-btn-prev">◀ 上一页</button>
+              <button type="button" class="btn btn-xs btn-secondary" id="portal-tx-btn-next">下一页 ▶</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab 3: Task Extraction History -->
+      <section class="tab-content" id="tab-task-history" role="tabpanel" aria-labelledby="tab-button-tasks" hidden>
+        <div class="action-bar">
+          <div class="action-left">
+            <select class="select-filter" id="filter-portal-task-status" aria-label="筛选邮件任务状态">
+              <option value="">全部状态</option>
+              <option value="SUCCESS">成功 (SUCCESS)</option>
+              <option value="FAILED">失败 (FAILED)</option>
+            </select>
+          </div>
+          <div class="action-right">
+            <span class="text-muted" id="portal-task-count-info">共 0 条</span>
+          </div>
+        </div>
+
+        <div class="card table-card">
+          <div class="table-responsive">
+            <table class="data-table" id="table-portal-tasks">
+              <thead>
+                <tr>
+                  <th>任务 ID</th>
+                  <th>邮件主题 / 单证内容</th>
+                  <th>处理状态</th>
+                  <th>处理耗时</th>
+                  <th>扣费金额</th>
+                  <th>提交时间</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td colspan="7" class="text-center text-muted py-8">加载中...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <!-- Tasks Extraction Pagination Bar -->
+          <div class="pagination-bar" id="portal-task-pagination-bar" style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-top:1px solid var(--portal-border); background:rgba(0,0,0,0.15); border-radius:0 0 10px 10px;">
+            <div class="pagination-info" style="font-size:0.82rem; color:var(--portal-text-muted);">
+              共 <strong id="portal-task-total-count" style="color:var(--portal-primary);">0</strong> 条任务 · 第 <span id="portal-task-curr-page">1</span> / <span id="portal-task-total-pages">1</span> 页
+            </div>
+            <div class="pagination-controls" style="display:flex; align-items:center; gap:8px;">
+              <select class="form-control" id="portal-task-page-size" style="width:auto; padding:4px 8px; font-size:0.8rem; background:rgba(0,0,0,0.3); color:#fff; border:1px solid var(--portal-border); border-radius:6px;">
+                <option value="10" selected>10 条/页</option>
+                <option value="20">20 条/页</option>
+                <option value="50">50 条/页</option>
+              </select>
+              <button type="button" class="btn btn-xs btn-secondary" id="portal-task-btn-prev">◀ 上一页</button>
+              <button type="button" class="btn btn-xs btn-secondary" id="portal-task-btn-next">下一页 ▶</button>
+            </div>
+          </div>
+        </div>
+      </section>
+      </section>
+    </main>
+  </div>
+
+  <!-- Modal: Task JSON Viewer -->
+  <div class="modal" id="modal-portal-task-detail" role="dialog" aria-modal="true" aria-labelledby="ptd-title">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <h3 id="ptd-title">任务详情与 57 核心字段</h3>
+        <button class="modal-close" type="button" data-close="modal-portal-task-detail" aria-label="关闭任务详情">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="task-info-grid">
+          <div class="info-item"><span>任务ID:</span><strong id="ptd-id"></strong></div>
+          <div class="info-item"><span>状态:</span><span id="ptd-status-badge"></span></div>
+          <div class="info-item"><span>耗时:</span><strong id="ptd-duration"></strong></div>
+          <div class="info-item"><span>扣费金额:</span><strong id="ptd-charge"></strong></div>
+        </div>
+        <div class="form-group mt-4">
+          <label>V3 结构化抽取 JSON 结果:</label>
+          <div class="json-viewer-container">
+            <pre><code id="ptd-json-code"></code></pre>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+  <!-- Modal: Portal API Key & Integration -->
+  <div class="modal" id="modal-portal-keys" role="dialog" aria-modal="true">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <h3>🔑 企业 API 凭证与集成调用</h3>
+        <button class="modal-close" type="button" onclick="closePortalModal('modal-portal-keys')" aria-label="关闭">&times;</button>
+      </div>
+      <div class="modal-body">
+        <!-- Newly Generated Key Box -->
+        <div id="portal-new-key-alert" style="display:none; background:rgba(16, 185, 129, 0.12); border:1px solid rgba(16, 185, 129, 0.35); border-radius:12px; padding:16px; margin-bottom:18px;">
+          <div style="color:#34d399; font-weight:600; font-size:0.9rem; margin-bottom:6px;">✨ 新 API Key 生成成功 (请立即保存，关闭后将不再显示完整密文):</div>
+          <div class="copy-input-group" style="margin-bottom:8px; display:flex; gap:8px;">
+            <input type="text" id="portal-new-key-val" class="form-control font-mono" readonly style="color:#38bdf8; font-weight:600; flex:1; background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.1); padding:8px 12px; border-radius:8px;">
+            <button type="button" class="btn btn-primary" onclick="copyPortalText(document.getElementById('portal-new-key-val').value)">复制 Key</button>
+          </div>
+          <div style="font-size:0.75rem; color:var(--portal-text-muted);">Webhook 验签 Secret: <code id="portal-new-key-secret" style="color:#fbbf24;"></code></div>
+        </div>
+
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <span style="font-weight:600; font-size:0.85rem; color:var(--portal-text-secondary);">我的 API Key 列表:</span>
+          <button type="button" class="btn btn-sm btn-primary" id="btn-portal-gen-key">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            <span>自助生成新 Key</span>
+          </button>
+        </div>
+
+        <div class="table-responsive" style="max-height:220px; overflow-y:auto; border:1px solid var(--portal-border); border-radius:10px; margin-bottom:16px;">
+          <table class="data-table" id="table-portal-keys-list">
+            <thead>
+              <tr>
+                <th>密钥名称</th>
+                <th>API Key 前缀</th>
+                <th>Webhook Secret</th>
+                <th>状态</th>
+                <th>创建时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td colspan="5" class="text-center text-muted py-4">正在查询密钥...</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div>
+          <div style="font-weight:600; font-size:0.85rem; color:var(--portal-text-secondary); margin-bottom:6px;">标准 API 调用示例 (cURL):</div>
+          <div class="json-viewer-container" style="max-height:140px; padding:12px; border-radius:10px;">
+            <pre><code id="portal-keys-curl-code" style="font-size:0.75rem; color:#a5f3fc;"></code></pre>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" type="button" onclick="closePortalModal('modal-portal-keys')">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Global Modal: Custom Confirmation (Portal) -->
+  <div class="modal" id="modal-global-confirm" style="z-index: 10050;">
+    <div class="modal-dialog" style="max-width: 440px;">
+      <div class="modal-body" style="padding: 28px 24px 20px; text-align: center;">
+        <div id="confirm-icon-box" class="icon-warning" style="width: 56px; height: 56px; border-radius: 50%; margin: 0 auto 16px; display: flex; align-items: center; justify-content: center;">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+        </div>
+        <h3 id="confirm-modal-title" style="font-size: 1.15rem; font-weight: 700; color: #fff; margin-bottom: 8px;">请确认操作</h3>
+        <p id="confirm-modal-message" style="font-size: 0.88rem; color: var(--portal-text-secondary); line-height: 1.5; margin-bottom: 20px;"></p>
+        <div style="display: flex; gap: 10px; justify-content: center;">
+          <button type="button" class="btn btn-secondary" id="confirm-modal-cancel" style="min-width: 100px;">取消</button>
+          <button type="button" class="btn btn-primary" id="confirm-modal-ok" style="min-width: 100px;">确认</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Global Modal: Custom Prompt Input (Portal) -->
+  <div class="modal" id="modal-global-prompt" style="z-index: 10050;">
+    <div class="modal-dialog" style="max-width: 460px;">
+      <div class="modal-header">
+        <h3 id="prompt-modal-title">请输入信息</h3>
+        <button type="button" class="modal-close" id="prompt-modal-close">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 20px 24px;">
+        <div class="form-group">
+          <label id="prompt-modal-label" style="margin-bottom: 8px; display: block; font-size: 0.86rem; color: var(--portal-text-secondary);">输入内容:</label>
+          <input type="text" class="form-control" id="prompt-modal-input" style="font-size: 0.92rem; padding: 10px 14px; background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.1); border-radius:8px; width:100%; color:#fff;" autocomplete="off">
+        </div>
+      </div>
+      <div class="modal-footer" style="padding: 14px 24px;">
+        <button type="button" class="btn btn-secondary" id="prompt-modal-cancel">取消</button>
+        <button type="button" class="btn btn-primary" id="prompt-modal-ok">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="/static/js/portal.js?v=20260818v9"></script>
+</body>
+</html>
+

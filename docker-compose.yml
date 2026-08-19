@@ -1,0 +1,153 @@
+name: cargoplus
+
+x-app-environment: &app-environment
+  ENVIRONMENT: production
+  DEBUG: "false"
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cargo}:${POSTGRES_PASSWORD:-cargo-local-password}@postgres:5432/${POSTGRES_DB:-cargo}
+  TASK_QUEUE_MODE: celery
+  CELERY_BROKER_URL: redis://redis:6379/0
+  CELERY_RESULT_BACKEND: redis://redis:6379/1
+  CELERY_QUEUE_NAME: cargo-extraction
+  CELERY_WEBHOOK_QUEUE_NAME: cargo-webhooks
+  WORKER_CONCURRENCY: ${CELERY_WORKER_CONCURRENCY:-8}
+  SKILL_V3_PATH: /opt/cargo-mail-extraction-skill-v3
+  UPLOAD_DIR: /app/data/uploads
+  ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY:?set ADMIN_SECRET_KEY in .env}
+  SESSION_SECRET_KEY: ${SESSION_SECRET_KEY:?set SESSION_SECRET_KEY in .env}
+  LLM_API_KEY: ${LLM_API_KEY:?set LLM_API_KEY in .env}
+  LLM_BASE_URL: ${LLM_BASE_URL:-https://api.senseaudio.cn/v1}
+  LLM_MODEL: ${LLM_MODEL:-deepseek-v4-flash-0731}
+  LLM_FALLBACK_MODEL: ${LLM_FALLBACK_MODEL:-deepseek-v4-flash-0731}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://127.0.0.1:8001,http://localhost:8001}
+  METRICS_ENABLED: "true"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cargo}
+      POSTGRES_USER: ${POSTGRES_USER:-cargo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cargo-local-password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    image: cargoplus-app:local
+    build:
+      context: ..
+      dockerfile: cargo_service/Dockerfile
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    env_file:
+      - .env
+    environment: *app-environment
+    ports:
+      - "127.0.0.1:${APP_PORT:-8001}:8000"
+    volumes:
+      - uploads_data:/app/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  worker:
+    image: cargoplus-app:local
+    build:
+      context: ..
+      dockerfile: cargo_service/Dockerfile
+    restart: unless-stopped
+    init: true
+    # Warm shutdown lets in-flight jobs finish; hard task timeout remains the final guard.
+    stop_grace_period: 7m
+    command: ["sh", "-c", "celery -A app.celery_app:celery_app worker --loglevel=INFO --concurrency=$${WORKER_CONCURRENCY} --queues=$${CELERY_QUEUE_NAME}"]
+    env_file:
+      - .env
+    environment: *app-environment
+    volumes:
+      - uploads_data:/app/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app:celery_app inspect ping --destination=celery@$${HOSTNAME} --timeout=3 | grep -q pong"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 20s
+
+  webhook-worker:
+    image: cargoplus-app:local
+    build:
+      context: ..
+      dockerfile: cargo_service/Dockerfile
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 1m
+    command: ["sh", "-c", "celery -A app.celery_app:celery_app worker --loglevel=INFO --concurrency=4 --queues=$${CELERY_WEBHOOK_QUEUE_NAME}"]
+    env_file:
+      - .env
+    environment: *app-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app:celery_app inspect ping --destination=celery@$${HOSTNAME} --timeout=3 | grep -q pong"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 20s
+
+  beat:
+    image: cargoplus-app:local
+    build:
+      context: ..
+      dockerfile: cargo_service/Dockerfile
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    command: ["celery", "-A", "app.celery_app:celery_app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
+    env_file:
+      - .env
+    environment: *app-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  uploads_data:

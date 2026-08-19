@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: CargoPlus
+    orgId: 1
+    folder: CargoPlus
+    type: file
+    disableDeletion: true
+    editable: false
+    options:
+      path: /var/lib/grafana/dashboards

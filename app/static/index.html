@@ -1,0 +1,1250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CargoPlus 货代邮件抽取服务控制台</title>
+  <link rel="stylesheet" href="/static/css/app.css?v=20260819v6">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" integrity="sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg/P5HG5lF1urn4" crossorigin="anonymous"></script>
+
+  <script>
+    // Authentication Guard: Redirect to /login if not logged in
+    if (!localStorage.getItem('cargo_admin_token')) {
+      window.location.href = '/login';
+    }
+
+    function adminLogout() {
+      localStorage.removeItem('cargo_admin_token');
+      window.location.href = '/login';
+    }
+
+    function fillSampleDocument() {
+      const subj = document.getElementById('wb-mail-subject');
+      const body = document.getElementById('wb-mail-body');
+      const att = document.getElementById('wb-attachment-text');
+      if (subj) subj.value = '订舱委托书 - 2x40HQ 深圳盐田至墨尔本 (BK123456)';
+      if (body) body.value = '请帮我司安排下周去墨尔本的海运订舱，运费预付 FOB YANTIAN。货物为日用品。';
+      if (att) att.value = `SHIPPER: ABC TRADING CO., LTD.
+ADD: NO.1 ROAD, SHENZHEN, CHINA
+TEL: +86 755 12345678
+FAX: 0755-88889999
+EMAIL: ops@example.com
+
+CONSIGNEE: XYZ IMPORT PTY LTD
+ADD: 100 TEST STREET, MELBOURNE, AUSTRALIA
+TEL: +61 3 9000 0000
+EMAIL: import@example.com
+
+NOTIFY PARTY: SAME AS CONSIGNEE
+
+POL: YANTIAN (CNYTN)
+POD: MELBOURNE (AUMEL)
+VESSEL/VOYAGE: KOTA TEST / 001S
+ETD: 2026/08/28
+ETA: 2026-09-12
+BOOKING NO: BK123456
+
+CONTAINER: ABCU1234567 / SEAL: ML-998811 / 40'HQ / 9170 KGS / 68 CBM / 501 CARTONS
+GOODS: DAILY NECESSITIES (日用品)
+HS CODE: 3924900000
+PACKAGES: 501 CARTONS
+G.W.: 9,170.000 KGS
+MEAS: 68.000 CBM
+FREIGHT TERM: PREPAID`;
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function switchTasksBillingSubTab(type) {
+      const btnTasks = document.getElementById('btn-subtab-tasks');
+      const btnBilling = document.getElementById('btn-subtab-billing');
+      const viewTasks = document.getElementById('subview-tasks');
+      const viewBilling = document.getElementById('subview-billing');
+      if (type === 'tasks') {
+        if (btnTasks) btnTasks.classList.add('active');
+        if (btnBilling) btnBilling.classList.remove('active');
+        if (viewTasks) viewTasks.style.display = 'block';
+        if (viewBilling) viewBilling.style.display = 'none';
+      } else {
+        if (btnBilling) btnBilling.classList.add('active');
+        if (btnTasks) btnTasks.classList.remove('active');
+        if (viewBilling) viewBilling.style.display = 'block';
+        if (viewTasks) viewTasks.style.display = 'none';
+      }
+    }
+
+
+    function openModal(id) {
+      const el = document.getElementById(id);
+      if (el) el.classList.add('active');
+    }
+
+    function closeModal(id) {
+      const el = document.getElementById(id);
+      if (el) el.classList.remove('active');
+    }
+
+    // Backward-compatible entry point: the single validated implementation is
+    // registered by app.js after DOMContentLoaded.
+    async function startBenchmarkTest() {
+      document.getElementById('btn-start-bench')?.click();
+    }
+
+    async function legacyBenchmarkImplementationNotUsed() {
+      const taskCount = parseInt(document.getElementById('bench-task-count')?.value) || 10;
+      const concurrency = parseInt(document.getElementById('bench-concurrency-limit')?.value) || 10;
+      const progressSection = document.getElementById('bench-progress-section');
+      const progressBar = document.getElementById('bench-progress-bar');
+      const progressText = document.getElementById('bench-progress-text');
+      const statusBadge = document.getElementById('bench-status-badge');
+      const liveLog = document.getElementById('bench-live-log');
+      const btnStart = document.getElementById('btn-start-bench');
+
+      if (progressSection) progressSection.style.display = 'block';
+      if (progressBar) progressBar.style.width = '5%';
+      if (progressText) progressText.textContent = `正在并发提交 ${taskCount} 个任务...`;
+      if (statusBadge) {
+        statusBadge.textContent = '提交入队中...';
+        statusBadge.className = 'text-warning';
+      }
+      if (btnStart) btnStart.disabled = true;
+
+      const sampleDocs = [
+        { subject: "Booking - MSC - Yantian to Hamburg", body: "Please arrange booking. Freight prepaid.", text: "SHIPPER: GLORY SHIPPING CO.\nCONSIGNEE: EURO LOGISTICS\nPOL: YANTIAN\nPOD: HAMBURG\nCONTAINER: MSCU9988776 / 40HQ\nGOODS: AUTOMOTIVE PARTS 汽车零部件\nPACKAGES: 420 CARTONS\nG.W.: 8,500.00 KGS\nMEAS: 58.5 CBM" },
+        { subject: "Bkg Ref: COSCO - Ningbo to Long Beach", body: "FCL shipment booking. CY-CY.", text: "SHIPPER: NINGBO TEXTILE CORP.\nCONSIGNEE: PACIFIC APPAREL\nPOL: NINGBO\nPOD: LONG BEACH\nCONTAINER: CCLU1234567 / 20GP\nGOODS: COTTON SHIRTS 纯棉衬衫\nPACKAGES: 800 CARTONS\nG.W.: 6,200.00 KGS\nMEAS: 28.0 CBM" },
+        { subject: "Booking Memo - CMA CGM - Qingdao to Rotterdam", body: "Reefer container booking.", text: "SHIPPER: QINGDAO SEAFOOD\nCONSIGNEE: ROTTERDAM COLD STORE\nPOL: QINGDAO\nPOD: ROTTERDAM\nCONTAINER: CMAU5566778 / 40RF\nGOODS: FROZEN FISH 冷冻鱼\nPACKAGES: 1200 BOXES\nG.W.: 22,000.00 KGS\nMEAS: 60.0 CBM" },
+      ];
+
+      const submittedTaskIds = [];
+      let logText = `[${new Date().toLocaleTimeString()}] 🚀 启动并发压测: 总任务 ${taskCount}, 并发 ${concurrency}\n`;
+      if (liveLog) liveLog.textContent = logText;
+
+      const startTime = Date.now();
+      const adminToken = localStorage.getItem('cargo_admin_token') || '';
+
+      // Submit tasks
+      for (let i = 0; i < taskCount; i++) {
+        const sample = sampleDocs[i % sampleDocs.length];
+        try {
+          const res = await fetch('/api/v1/extract/async', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${adminToken}`,
+              'X-Admin-Secret': adminToken,
+            },
+            body: JSON.stringify({
+              mail_subject: `[压测 #${i+1}] ${sample.subject}`,
+              mail_body: sample.body,
+              attachments: [{ filename: `doc_${i+1}.txt`, content_type: 'text/plain', text: sample.text, tables: [], ocr_text: '' }],
+            }),
+          });
+          if (res.ok) {
+            const d = await res.json();
+            submittedTaskIds.push(d.task_id);
+            logText += `[${new Date().toLocaleTimeString()}] 任务 #${i+1} 已入队: ${d.task_id}\n`;
+          }
+        } catch (err) {
+          logText += `[${new Date().toLocaleTimeString()}] 任务 #${i+1} 提交失败: ${err.message}\n`;
+        }
+        if (liveLog) {
+          liveLog.textContent = logText;
+          liveLog.scrollTop = liveLog.scrollHeight;
+        }
+      }
+
+      if (progressBar) progressBar.style.width = '30%';
+      if (progressText) progressText.textContent = `全部 ${submittedTaskIds.length} 个任务已入队，Worker 正在并发消费...`;
+      if (statusBadge) statusBadge.textContent = '后台异步消费中...';
+
+      // Poll tasks until completed
+      let completedCount = 0;
+      let successCount = 0;
+      const pollTimer = setInterval(async () => {
+        try {
+          const checkRes = await fetch(`/admin/tasks?page=1&page_size=100`, {
+            headers: {
+              'Authorization': `Bearer ${adminToken}`,
+              'X-Admin-Secret': adminToken,
+            }
+          });
+          const checkData = await checkRes.json();
+          const items = checkData.items || [];
+
+          completedCount = 0;
+          successCount = 0;
+          for (let tid of submittedTaskIds) {
+            const t = items.find((item) => item.id === tid);
+            if (t && (t.status === 'SUCCESS' || t.status === 'FAILED')) {
+              completedCount++;
+              if (t.status === 'SUCCESS') successCount++;
+            }
+          }
+
+          const pct = Math.min(95, Math.round(30 + (completedCount / Math.max(1, submittedTaskIds.length)) * 65));
+          if (progressBar) progressBar.style.width = `${pct}%`;
+          if (progressText) progressText.textContent = `正在消费中: ${completedCount} / ${submittedTaskIds.length} 完成 (成功: ${successCount})`;
+
+          if (completedCount >= submittedTaskIds.length || (Date.now() - startTime > 120000)) {
+            clearInterval(pollTimer);
+            const totalElapsedSec = ((Date.now() - startTime) / 1000).toFixed(2);
+            if (progressBar) progressBar.style.width = '100%';
+            if (statusBadge) {
+              statusBadge.textContent = '压测完成';
+              statusBadge.className = 'text-success';
+            }
+            if (btnStart) btnStart.disabled = false;
+
+            logText += `\n========================================\n`;
+            logText += `📊 并发压测完成总结报告:\n`;
+            logText += `总提交任务: ${submittedTaskIds.length}\n`;
+            logText += `成功完成数: ${successCount} (${((successCount/Math.max(1, submittedTaskIds.length))*100).toFixed(1)}%)\n`;
+            logText += `总耗时: ${totalElapsedSec} 秒\n`;
+            logText += `吞吐率 (TPS): ${(submittedTaskIds.length / Math.max(0.1, totalElapsedSec)).toFixed(2)} 封/秒\n`;
+            logText += `折合日处理量: ${((submittedTaskIds.length / Math.max(0.1, totalElapsedSec)) * 86400).toFixed(0)} 封/天\n`;
+            logText += `扣费对账: ¥${(successCount * 0.5).toFixed(2)} (成功 ${successCount} 次 × 0.50 元)\n`;
+            logText += `========================================\n`;
+            if (liveLog) {
+              liveLog.textContent = logText;
+              liveLog.scrollTop = liveLog.scrollHeight;
+            }
+          }
+        } catch (pollErr) {
+          console.error(pollErr);
+        }
+      }, 1500);
+    }
+  </script>
+</head>
+
+
+
+
+<body>
+  <div class="app-layout">
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-logo">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path>
+            <path d="m3.3 7 8.7 5 8.7-5"></path>
+            <path d="M12 22V12"></path>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <span class="brand-name">CargoPlus</span>
+          <span class="brand-tag">API Platform V3</span>
+        </div>
+      </div>
+
+      <nav class="nav-menu">
+        <button class="nav-item active" data-tab="dashboard" id="nav-dashboard">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+          <span>数据看板</span>
+        </button>
+        <button class="nav-item" data-tab="tenants" id="nav-tenants">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          <span>租户与秘钥</span>
+        </button>
+        <button class="nav-item" data-tab="tasks_billing" id="nav-tasks-billing">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/><rect width="18" height="12" x="3" y="6" rx="2" style="opacity:0.4"/></svg>
+          <span>任务与对账流水</span>
+        </button>
+        <button class="nav-item" data-tab="workbench" id="nav-workbench">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
+          <span>在线调试工作台</span>
+        </button>
+        <button class="nav-item" data-tab="llm_config" id="nav-llm-config">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span>大模型配置</span>
+        </button>
+      </nav>
+
+
+      <div class="sidebar-footer">
+        <div class="system-status">
+          <span class="status-indicator live"></span>
+          <span class="status-label">核心抽取引擎: 运行中</span>
+        </div>
+        <div class="engine-badge">SenseTime · deepseek-v4-flash</div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- Top Bar -->
+      <header class="topbar">
+        <div class="page-title-area">
+          <h1 id="page-title">系统大盘总览</h1>
+          <p id="page-subtitle">监控日均 5,000~10,000 封海运邮件抽取吞吐量、SLA 及多租户扣费状态</p>
+        </div>
+        <div class="topbar-actions">
+          <a href="/portal" class="btn btn-secondary" style="border-color: rgba(16, 185, 129, 0.4); color: #34d399;" title="进入租户对账中心">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
+            <span>租户对账中心</span>
+          </a>
+          <button class="btn btn-secondary" id="btn-refresh" title="刷新数据">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+            <span>刷新</span>
+          </button>
+          <a href="/docs" target="_blank" class="btn btn-primary" id="btn-swagger-docs">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+            <span>API 文档</span>
+          </a>
+          <div style="display:flex; align-items:center; gap:8px; margin-left:4px; padding-left:10px; border-left:1px solid rgba(255,255,255,0.12);">
+            <span style="font-size:0.8rem; color:var(--text-secondary);">👤 管理员</span>
+            <button type="button" class="btn btn-sm btn-secondary text-danger" id="btn-admin-logout" title="退出登录">退出</button>
+          </div>
+        </div>
+      </header>
+
+
+
+      <!-- Tab 1: Dashboard -->
+      <section class="tab-content active" id="tab-dashboard">
+        <div class="dashboard-view-switch" role="tablist" aria-label="数据看板视图">
+          <button type="button" class="dashboard-view-tab active" id="dashboard-tab-realtime" role="tab" aria-selected="true" aria-controls="dashboard-panel-realtime" data-dashboard-view="realtime">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 3v18h18"/><path d="m7 16 4-5 4 3 4-7"/></svg>
+            <span>实时运营总览</span>
+          </button>
+          <button type="button" class="dashboard-view-tab" id="dashboard-tab-history" role="tab" aria-selected="false" aria-controls="dashboard-panel-history" data-dashboard-view="history" tabindex="-1">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>
+            <span>历史经营分析</span>
+          </button>
+        </div>
+
+        <div class="dashboard-panel active" id="dashboard-panel-realtime" role="tabpanel" aria-labelledby="dashboard-tab-realtime">
+        <!-- Metric Cards -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-title">今日邮件抽取总量</span>
+              <span class="metric-badge">实时</span>
+            </div>
+            <div class="metric-value" id="stat-today-total">0</div>
+            <div class="metric-footer">
+              <span class="text-success" id="stat-success-count">0 成功</span> · 
+              <span class="text-danger" id="stat-failed-count">0 失败</span>
+            </div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-title">抽取成功率</span>
+              <span class="metric-badge success">SLA ≥ 99%</span>
+            </div>
+            <div class="metric-value" id="stat-success-rate">100.0%</div>
+            <div class="metric-footer">
+              <span>平均处理耗时: </span><strong id="stat-avg-duration">0 ms</strong>
+            </div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-title">今日扣费营收 (0.5元/次)</span>
+              <span class="metric-badge">原子对账</span>
+            </div>
+            <div class="metric-value" id="stat-today-revenue">¥0.00</div>
+            <div class="metric-footer">
+              <span>全平台租户存量余额: </span><strong id="stat-total-balance">¥0.00</strong>
+            </div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-title">异步队列状态</span>
+              <span class="metric-badge" id="badge-queue-status">正常</span>
+            </div>
+            <div class="metric-value" id="stat-queue-backlog">0</div>
+            <div class="metric-footer">
+              <span>并发限制器: </span><strong id="stat-active-tenants">0 租户活跃</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- Charts Area -->
+        <div class="charts-section">
+          <div class="card chart-card">
+            <div class="card-header">
+              <div class="card-title-group">
+                <h3>近 14 天邮件抽取量与吞吐趋势</h3>
+                <p>监控日均 5,000~10,000 封吞吐与波峰处理表现</p>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="chart-container">
+                <canvas id="chart-throughput"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <div class="card chart-card">
+            <div class="card-header">
+              <div class="card-title-group">
+                <h3>近 14 天扣费流水与营收统计</h3>
+                <p>成功抽取扣费 0.50 元/次统计</p>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="chart-container">
+                <canvas id="chart-revenue"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+        </div>
+
+        <div class="dashboard-panel" id="dashboard-panel-history" role="tabpanel" aria-labelledby="dashboard-tab-history" hidden>
+          <div class="history-dashboard-header">
+            <div>
+              <span class="history-eyebrow">HISTORICAL PERFORMANCE</span>
+              <h2>历史经营分析</h2>
+              <p>累计经营指标统计全量数据，趋势图可按时间范围切换。</p>
+            </div>
+            <label class="history-period-control" for="history-period-days">
+              <span>趋势周期</span>
+              <select class="form-control" id="history-period-days">
+                <option value="30">最近 30 天</option>
+                <option value="90" selected>最近 90 天</option>
+                <option value="180">最近 180 天</option>
+                <option value="365">最近 365 天</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="metrics-grid history-metrics-grid">
+            <div class="metric-card history-metric-card history-metric-volume">
+              <div class="metric-header">
+                <span class="metric-title">历史邮件抽取总量</span>
+                <span class="metric-badge">累计</span>
+              </div>
+              <div class="metric-value" id="history-total">--</div>
+              <div class="metric-footer"><span id="history-date-range">尚无历史任务</span></div>
+            </div>
+
+            <div class="metric-card history-metric-card history-metric-success">
+              <div class="metric-header">
+                <span class="metric-title">历史抽取成功率</span>
+                <span class="metric-badge success">按已完成任务</span>
+              </div>
+              <div class="metric-value" id="history-success-rate">--</div>
+              <div class="metric-footer"><span class="text-success" id="history-success-count">0 成功</span> · <span class="text-danger" id="history-failed-count">0 失败</span></div>
+            </div>
+
+            <div class="metric-card history-metric-card history-metric-revenue">
+              <div class="metric-header">
+                <span class="metric-title">历史累计营收</span>
+                <span class="metric-badge" id="history-revenue-quality">成功扣费</span>
+              </div>
+              <div class="metric-value" id="history-revenue">--</div>
+              <div class="metric-footer">单次成功平均营收 <strong id="history-avg-revenue">¥0.00</strong></div>
+            </div>
+
+            <div class="metric-card history-metric-card history-metric-latency">
+              <div class="metric-header">
+                <span class="metric-title">历史平均处理耗时</span>
+                <span class="metric-badge">成功任务</span>
+              </div>
+              <div class="metric-value" id="history-avg-duration">--</div>
+              <div class="metric-footer">处理中 / 排队 <strong id="history-in-progress">0 封</strong></div>
+            </div>
+          </div>
+
+          <div class="history-period-summary" aria-live="polite">
+            <div><span>选定周期</span><strong id="history-period-label">最近 90 天</strong></div>
+            <div><span>邮件量</span><strong id="history-period-total">0</strong></div>
+            <div><span>成功率</span><strong id="history-period-success-rate">0.0%</strong></div>
+            <div><span>营收</span><strong id="history-period-revenue">¥0.00</strong></div>
+          </div>
+
+          <div class="charts-section history-charts-section">
+            <div class="card chart-card">
+              <div class="card-header">
+                <div class="card-title-group">
+                  <h3>邮件抽取量与成功率趋势</h3>
+                  <p>按日观察业务规模、成功量与质量变化</p>
+                </div>
+              </div>
+              <div class="card-body"><div class="chart-container history-chart-container"><canvas id="chart-history-volume"></canvas></div></div>
+            </div>
+            <div class="card chart-card">
+              <div class="card-header">
+                <div class="card-title-group">
+                  <h3>历史营收趋势</h3>
+                  <p>仅统计成功抽取产生的扣费收入</p>
+                </div>
+              </div>
+              <div class="card-body"><div class="chart-container history-chart-container"><canvas id="chart-history-revenue"></canvas></div></div>
+            </div>
+          </div>
+
+          <div class="card history-ranking-card">
+            <div class="card-header">
+              <div class="card-title-group">
+                <h3>租户历史贡献排行</h3>
+                <p>按累计邮件抽取量排序，辅助识别核心客户与服务质量</p>
+              </div>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table" id="table-history-tenants">
+                <thead><tr><th>排名</th><th>企业租户</th><th>邮件总量</th><th>成功 / 失败</th><th>成功率</th><th>累计营收</th></tr></thead>
+                <tbody><tr><td colspan="6" class="text-center text-muted py-8">切换至历史经营分析后加载数据</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab 2: Tenants & Keys -->
+      <section class="tab-content" id="tab-tenants">
+        <div class="action-bar">
+          <div class="action-left">
+            <input type="text" class="input-search" id="search-tenant" placeholder="搜索租户名称或 ID...">
+          </div>
+          <div class="action-right">
+            <button class="btn btn-primary" id="btn-open-create-tenant">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>
+              <span>开通新租户</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="card table-card">
+          <div class="table-responsive">
+            <table class="data-table" id="table-tenants">
+              <thead>
+                <tr>
+                  <th>租户名称 / ID</th>
+                  <th>账户余额 (元)</th>
+                  <th>单次单价 (元)</th>
+                  <th>并发上限</th>
+                  <th>API Keys</th>
+                  <th>状态</th>
+                  <th>创建时间</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td colspan="8" class="text-center text-muted py-8">加载中...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab 3: Unified Tasks and Billing Monitor -->
+      <section class="tab-content" id="tab-tasks_billing">
+        <!-- Sub Tabs Switcher -->
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; border-bottom:1px solid var(--border-subtle); padding-bottom:12px;">
+          <div class="sub-tab-group" style="display:inline-flex; gap:6px; background:var(--bg-surface-elevated); padding:4px; border-radius:10px; border:1px solid var(--border-subtle);">
+            <button type="button" class="btn btn-sm btn-sub-tab active" id="btn-subtab-tasks" onclick="switchTasksBillingSubTab('tasks')" style="border-radius:7px; padding:6px 14px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+              <span>📋 单证任务追踪 (57字段与耗时)</span>
+            </button>
+            <button type="button" class="btn btn-sm btn-sub-tab" id="btn-subtab-billing" onclick="switchTasksBillingSubTab('billing')" style="border-radius:7px; padding:6px 14px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg>
+              <span>💰 财务资金流水 (充值与扣费对账)</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Sub View 1: Tasks Monitor -->
+        <div id="subview-tasks">
+          <div class="action-bar">
+            <div class="action-left">
+              <input type="text" class="input-search" id="search-task" placeholder="搜索任务ID、租户ID、邮件主题...">
+              <select class="select-filter" id="filter-task-status">
+                <option value="">全部状态</option>
+                <option value="SUCCESS">成功 (SUCCESS)</option>
+                <option value="FAILED">失败 (FAILED)</option>
+                <option value="PROCESSING">处理中 (PROCESSING)</option>
+                <option value="PENDING">排队中 (PENDING)</option>
+              </select>
+            </div>
+            <div class="action-right">
+              <span class="text-muted" id="task-pagination-info">共 0 条</span>
+            </div>
+          </div>
+
+          <div class="card table-card">
+            <div class="table-responsive">
+              <table class="data-table" id="table-tasks">
+                <thead>
+                  <tr>
+                    <th>任务 ID</th>
+                    <th>租户</th>
+                    <th>邮件主题 / 文件</th>
+                    <th>状态</th>
+                    <th>处理耗时</th>
+                    <th>扣费金额</th>
+                    <th>Webhook 状态</th>
+                    <th>提交时间</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td colspan="9" class="text-center text-muted py-8">加载中...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <!-- Tasks Pagination Bar -->
+            <div class="pagination-bar" id="tasks-pagination-bar" style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-top:1px solid var(--border-subtle); background:var(--bg-surface-subtle); border-radius:0 0 10px 10px;">
+              <div class="pagination-info" style="font-size:0.82rem; color:var(--text-muted);">
+                共 <strong id="tasks-total-count" class="text-primary">0</strong> 条记录 · 第 <span id="tasks-curr-page">1</span> / <span id="tasks-total-pages">1</span> 页
+              </div>
+              <div class="pagination-controls" style="display:flex; align-items:center; gap:8px;">
+                <select class="form-control" id="tasks-page-size" style="width:auto; padding:4px 8px; font-size:0.8rem;">
+                  <option value="10">10 条/页</option>
+                  <option value="20" selected>20 条/页</option>
+                  <option value="50">50 条/页</option>
+                </select>
+                <button type="button" class="btn btn-xs btn-secondary" id="tasks-btn-prev">◀ 上一页</button>
+                <button type="button" class="btn btn-xs btn-secondary" id="tasks-btn-next">下一页 ▶</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sub View 2: Billing Transactions -->
+        <div id="subview-billing" style="display:none;">
+          <div class="action-bar">
+            <div class="action-left">
+              <input type="text" class="input-search" id="search-billing" placeholder="搜索流水号、租户ID、任务ID或备注...">
+              <select class="select-filter" id="filter-billing-type">
+                <option value="">全部流水类型</option>
+                <option value="DEDUCTION">API 扣费 (DEDUCTION)</option>
+                <option value="RECHARGE">账户充值 (RECHARGE)</option>
+              </select>
+            </div>
+            <div class="action-right">
+              <span class="text-muted" id="billing-count-info">共 0 条明细</span>
+            </div>
+          </div>
+
+          <div class="card table-card">
+            <div class="table-responsive">
+              <table class="data-table" id="table-billing">
+                <thead>
+                  <tr>
+                    <th>流水编号</th>
+                    <th>租户 ID</th>
+                    <th>业务类型</th>
+                    <th>变动金额 (元)</th>
+                    <th>变动前余额</th>
+                    <th>变动后余额</th>
+                    <th>关联任务 / 备注</th>
+                    <th>操作人</th>
+                    <th>交易时间</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td colspan="9" class="text-center text-muted py-8">加载中...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <!-- Billing Pagination Bar -->
+            <div class="pagination-bar" id="billing-pagination-bar" style="display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-top:1px solid var(--border-subtle); background:var(--bg-surface-subtle); border-radius:0 0 10px 10px;">
+              <div class="pagination-info" style="font-size:0.82rem; color:var(--text-muted);">
+                共 <strong id="billing-total-count" class="text-primary">0</strong> 条流水 · 第 <span id="billing-curr-page">1</span> / <span id="billing-total-pages">1</span> 页
+              </div>
+              <div class="pagination-controls" style="display:flex; align-items:center; gap:8px;">
+                <select class="form-control" id="billing-page-size" style="width:auto; padding:4px 8px; font-size:0.8rem;">
+                  <option value="10">10 条/页</option>
+                  <option value="20" selected>20 条/页</option>
+                  <option value="50">50 条/页</option>
+                </select>
+                <button type="button" class="btn btn-xs btn-secondary" id="billing-btn-prev">◀ 上一页</button>
+                <button type="button" class="btn btn-xs btn-secondary" id="billing-btn-next">下一页 ▶</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+
+
+      <!-- Tab 5: Workbench Online Testing -->
+      <section class="tab-content" id="tab-workbench">
+        <div class="workbench-grid">
+          <!-- Left Input Column -->
+          <div class="card workbench-card">
+            <div class="card-header">
+              <div class="card-title-group">
+                <h3>邮件输入源</h3>
+                <p>支持粘贴邮件正文、上传订舱确认单/提单 PDF/Excel/图片 或 EML 邮件</p>
+              </div>
+              <div class="mode-switch">
+                <button class="btn btn-sm btn-secondary active" id="wb-mode-text">文本模式</button>
+                <button class="btn btn-sm btn-secondary" id="wb-mode-file">文件上传</button>
+              </div>
+            </div>
+            <div class="card-body">
+              <!-- Text Mode Form -->
+              <div id="wb-form-text">
+                <div class="form-group" style="margin-bottom:12px;">
+                  <label>选择调用租户 (用于计费与扣费):</label>
+                  <select class="form-control" id="wb-select-key"></select>
+                </div>
+                <div class="form-group">
+                  <label>邮件主题 (Subject):</label>
+                  <input type="text" class="form-control" id="wb-mail-subject" placeholder="例如: Booking BK123456 - Yantian to Melbourne">
+                </div>
+                <div class="form-group">
+                  <label>邮件正文 (Body):</label>
+                  <textarea class="form-control" id="wb-mail-body" rows="3" placeholder="Please arrange booking. Freight prepaid."></textarea>
+                </div>
+                <div class="form-group">
+                  <label>附件文本 / 单证内容 (Attachment Text):</label>
+                  <textarea class="form-control" id="wb-attachment-text" rows="8" placeholder="SHIPPER: ABC TRADING CO., LTD.&#10;ADD: NO.1 ROAD, SHENZHEN&#10;TEL: +86 755 12345678&#10;CONSIGNEE: XYZ IMPORT PTY LTD&#10;POL: YANTIAN&#10;POD: MELBOURNE&#10;CONTAINER: ABCU1234567 / SEAL123 / 40HQ&#10;GOODS: DAILY NECESSITIES 日用品&#10;HS CODE: 3924900000&#10;PACKAGES: 501 PACKAGES&#10;G.W.: 9,170.000 KGS&#10;MEAS: 68.000 CBM"></textarea>
+                </div>
+                <div class="form-actions">
+                  <button type="button" class="btn btn-secondary" id="wb-btn-fill-sample">载入货代示例单证</button>
+                  <button type="button" class="btn btn-primary" id="wb-btn-run-text">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    <span id="wb-run-btn-label">执行 V3 结构化抽取</span>
+                  </button>
+                </div>
+
+              </div>
+
+              <!-- File Mode Form -->
+              <div id="wb-form-file" style="display:none;">
+                <div class="form-group" style="margin-bottom:12px;">
+                  <label>选择调用租户 (用于计费与扣费):</label>
+                  <select class="form-control" id="wb-select-key-file"></select>
+                </div>
+
+                <div class="form-group">
+                  <label>上传邮件文件或附件文档 (支持 .eml, .pdf, .xlsx, .docx, 图片):</label>
+                  <div class="file-dropzone" id="wb-dropzone">
+                    <input type="file" id="wb-file-input" multiple style="display:none;">
+                    <div class="dropzone-inner">
+                      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
+                      <p>点击选择文件或将单证文件拖拽至此处</p>
+                      <span class="file-hint">支持 PDF 提单、Excel 箱单、Word 合同、EML 邮件、图片扫描件</span>
+                    </div>
+                  </div>
+                  <div id="wb-selected-files" class="selected-files-list"></div>
+                </div>
+
+                <div class="form-actions">
+                  <button class="btn btn-primary" id="wb-btn-run-file">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    <span>上传并抽取字段</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Output Column -->
+          <div class="card workbench-card">
+            <div class="card-header">
+              <div class="card-title-group">
+                <h3>抽取结果与 57 核心字段检查器</h3>
+                <p id="wb-result-status-text">就绪 · 等待执行</p>
+              </div>
+              <div class="card-actions" style="display:flex; gap:8px;">
+                <button type="button" class="btn btn-sm btn-primary" id="btn-open-concurrency-modal">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                  <span>批量并发压测</span>
+                </button>
+                <button type="button" class="btn btn-sm btn-secondary" id="wb-btn-copy-json" title="复制 JSON 结果">复制 JSON</button>
+              </div>
+
+            </div>
+
+            <div class="card-body">
+              <div class="json-viewer-container">
+                <pre><code id="wb-json-output">// 抽取结果将以 CargoPlus V3 标准 JSON 格式展示在此处...</code></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      
+      <!-- Tab 5: LLM Model Configuration -->
+      <section class="tab-content" id="tab-llm_config">
+        <div style="max-width: 880px; margin: 0 auto;">
+          <div class="card">
+            <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+              <div>
+                <h3 style="display:flex; align-items:center; gap:8px;">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+                  <span>大模型服务配置 (LLM Base URL & API Key)</span>
+                </h3>
+                <p style="color:var(--text-secondary); font-size:0.85rem; margin-top:4px;">配置用于海运单证 57 核心字段抽取的上游大模型 API 接口地址、模型标识与认证密钥，支持实时切换与热重载</p>
+              </div>
+              <div id="llm-status-badge-container">
+                <span class="badge badge-success" id="llm-status-badge" style="padding:6px 12px; font-size:0.8rem;">已就绪</span>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <!-- Quick Provider Presets -->
+              <div class="form-group" style="margin-bottom: 20px;">
+                <label style="font-weight:600; margin-bottom:8px; display:block;">🚀 常见服务商快捷预设 (点击一键填入地址与推荐模型)</label>
+                <div style="display:flex; flex-wrap:wrap; gap:8px;" id="llm-preset-buttons">
+                  <button type="button" class="btn btn-sm btn-secondary" onclick="window.applyLLMPreset('senseaudio')" title="商汤科技开放平台">🏢 商汤 SenseAudio</button>
+                  <button type="button" class="btn btn-sm btn-secondary" onclick="window.applyLLMPreset('deepseek')" title="DeepSeek 官方 API">🐳 DeepSeek 官方</button>
+                  <button type="button" class="btn btn-sm btn-secondary" onclick="window.applyLLMPreset('siliconflow')" title="硅基流动 SiliconFlow">⚡ 硅基流动 SiliconFlow</button>
+                  <button type="button" class="btn btn-sm btn-secondary" onclick="window.applyLLMPreset('dashscope')" title="阿里云百炼 DashScope">☁️ 阿里云百炼</button>
+                  <button type="button" class="btn btn-sm btn-secondary" onclick="window.applyLLMPreset('zhipu')" title="智谱 AI 开放平台">🔮 智谱 AI (GLM)</button>
+                  <button type="button" class="btn btn-sm btn-secondary" onclick="window.applyLLMPreset('openai')" title="OpenAI 官方 API">🟢 OpenAI 官方</button>
+                  <button type="button" class="btn btn-sm btn-secondary" onclick="window.applyLLMPreset('ollama')" title="本地自建 Ollama / vLLM">💻 本地 Ollama</button>
+                </div>
+              </div>
+
+              <form id="form-llm-config" onsubmit="return false;">
+                <div class="form-group">
+                  <label for="llm-cfg-base-url" style="font-weight:600;">大模型 API 接口地址 (Base URL) <span class="text-danger">*</span></label>
+                  <input type="text" class="form-control font-mono" id="llm-cfg-base-url" placeholder="https://api.senseaudio.cn/v1" required>
+                  <small style="color:var(--text-secondary); display:block; margin-top:4px;">支持任意兼容 OpenAI 规范的 API 端点（末尾无需加 /chat/completions）</small>
+                </div>
+
+                <div class="form-group" style="margin-top:16px;">
+                  <label for="llm-cfg-api-key" style="font-weight:600;">大模型 API 认证密钥 (API Key)</label>
+                  <div class="copy-input-group">
+                    <input type="password" class="form-control font-mono" id="llm-cfg-api-key" placeholder="若不修改密钥请留空（将保留当前已生效密钥）">
+                    <button type="button" class="btn btn-secondary" id="btn-toggle-llm-key-visibility" title="显示/隐藏密钥">👁️ 显示</button>
+                  </div>
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px; font-size:0.85rem;">
+                    <span style="color:var(--text-secondary);">当前已生效密钥: <strong id="llm-cfg-masked-key" style="color:#38bdf8;">加载中...</strong></span>
+                    <span style="color:var(--text-secondary); font-size:0.8rem;">💡 仅切换模型无需重新输入密钥</span>
+                  </div>
+                </div>
+
+                <div class="form-row" style="display:grid; grid-template-columns: 3fr 1fr; gap:16px; margin-top:16px;">
+                  <div class="form-group">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                      <label for="llm-cfg-model" style="font-weight:600; margin-bottom:0;">模型标识 (Model Name) <span class="text-danger">*</span></label>
+                      <button type="button" class="btn btn-sm btn-secondary" id="btn-fetch-remote-models" style="padding:2px 8px; font-size:0.75rem; height:26px; border-radius:4px; display:inline-flex; align-items:center; gap:4px;" title="向当前 Base URL 发送 GET /models 动态拉取服务商支持的全部模型">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                        <span id="btn-fetch-models-label">🔄 从 API 获取模型</span>
+                      </button>
+                    </div>
+                    <select id="llm-cfg-model" class="form-control font-mono" style="font-size:0.9rem; padding:9px 12px;" required>
+                      <option value="deepseek-v4-flash-0731">deepseek-v4-flash-0731 (商汤默认)</option>
+                      <option value="deepseek-chat">deepseek-chat (DeepSeek V3 官方)</option>
+                      <option value="deepseek-reasoner">deepseek-reasoner (DeepSeek R1 推理)</option>
+                      <option value="deepseek-ai/DeepSeek-V3">deepseek-ai/DeepSeek-V3 (硅基流动)</option>
+                      <option value="deepseek-ai/DeepSeek-R1">deepseek-ai/DeepSeek-R1 (硅基流动)</option>
+                      <option value="qwen-plus">qwen-plus (阿里通义千问)</option>
+                      <option value="qwen-max">qwen-max (阿里通义千问 Max)</option>
+                      <option value="glm-4-flash">glm-4-flash (智谱 GLM-4)</option>
+                      <option value="gpt-4o">gpt-4o (OpenAI)</option>
+                      <option value="gpt-4o-mini">gpt-4o-mini (OpenAI)</option>
+                      <option value="qwen2.5:14b">qwen2.5:14b (Ollama 本地)</option>
+                      <option value="__custom__">✏️ 手动输入其他自定义模型...</option>
+                    </select>
+                    <div id="llm-custom-model-wrapper" style="display:none; margin-top:8px;">
+                      <input type="text" class="form-control font-mono" id="llm-cfg-custom-model" placeholder="请输入自定义模型名称，如 deepseek-v4-pro">
+                    </div>
+                    <small style="color:var(--text-secondary); display:block; margin-top:4px;">从 API 动态获取或直接下拉选定模型；亦可选择“手动输入”指定任意模型</small>
+                  </div>
+                  <div class="form-group">
+                    <label for="llm-cfg-timeout" style="font-weight:600;">超时时间 (秒)</label>
+                    <input type="number" min="5" max="300" class="form-control font-mono" id="llm-cfg-timeout" value="60">
+                    <small style="color:var(--text-secondary); display:block; margin-top:4px;">默认 60s</small>
+                  </div>
+                </div>
+
+                <!-- Test Connection Live Output Box -->
+                <div id="llm-test-result-box" style="display:none; margin-top:20px; border-radius:10px; padding:14px; border:1px solid rgba(255,255,255,0.1);">
+                  <div id="llm-test-result-title" style="font-weight:600; font-size:0.9rem; margin-bottom:6px;"></div>
+                  <div id="llm-test-result-detail" style="font-size:0.8rem; font-family:var(--font-mono); color:var(--text-secondary);"></div>
+                </div>
+
+                <div class="form-actions" style="margin-top:24px; display:flex; justify-content:flex-end; gap:12px;">
+                  <button type="button" class="btn btn-secondary" id="btn-test-llm-connection">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                    <span id="btn-test-llm-label">⚡ 测试连通性</span>
+                  </button>
+                  <button type="button" class="btn btn-primary" id="btn-save-llm-config">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                    <span>保存并应用配置</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Modal: Create Tenant -->
+  <div class="modal" id="modal-create-tenant">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>开通新租户</h3>
+        <button class="modal-close" data-close="modal-create-tenant">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="form-create-tenant">
+          <div class="form-group">
+            <label>企业 / 客户名称 *:</label>
+            <input type="text" class="form-control" id="ct-name" required placeholder="例如: 宜运货代上海分部">
+          </div>
+          <div class="form-group">
+            <label>联系人邮箱:</label>
+            <input type="email" class="form-control" id="ct-email" placeholder="ops@example.com">
+          </div>
+          <div class="form-group">
+            <label>联系人电话:</label>
+            <input type="text" class="form-control" id="ct-phone" placeholder="13800000000">
+          </div>
+          <div class="form-row">
+            <div class="form-group col-6">
+              <label>单次扣费单价 (¥0.01–¥100.00):</label>
+              <input type="number" step="0.01" min="0.01" max="100" class="form-control" id="ct-price" value="0.50">
+            </div>
+            <div class="form-group col-6">
+              <label>初始充值金额 (¥0–¥1,000,000.00):</label>
+              <input type="number" step="0.01" min="0" max="1000000" class="form-control" id="ct-balance" value="100.00">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>最大并发处理数 (1–30):</label>
+            <input type="number" min="1" max="30" step="1" class="form-control" id="ct-concurrency" value="20">
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close="modal-create-tenant">取消</button>
+        <button class="btn btn-primary" id="btn-submit-create-tenant">确认创建并生成秘钥</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Show Newly Created Key -->
+  <div class="modal" id="modal-show-key">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>🎉 租户开通成功</h3>
+        <button class="modal-close" data-close="modal-show-key">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="alert alert-warning">
+          <strong>重要提示:</strong> API Key 仅显示一次，请妥善复制并保存给客户！
+        </div>
+        <div class="form-group">
+          <label>API Key (用于 Bearer 或 X-API-Key 鉴权):</label>
+          <div class="copy-input-group">
+            <input type="text" class="form-control font-mono" id="show-raw-key" readonly>
+            <button class="btn btn-secondary" id="btn-copy-raw-key">复制</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Webhook Secret (用于 HMAC-SHA256 签名校验):</label>
+          <div class="copy-input-group">
+            <input type="text" class="form-control font-mono" id="show-api-secret" readonly>
+            <button class="btn btn-secondary" id="btn-copy-secret">复制</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" data-close="modal-show-key">我已保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Edit Tenant Configuration -->
+  <div class="modal" id="modal-edit-tenant">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>🏢 修改租户配置与并发单价</h3>
+        <button type="button" class="modal-close" onclick="closeModal('modal-edit-tenant')">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="form-edit-tenant">
+          <input type="hidden" id="edit-tenant-id">
+          <div class="form-group">
+            <label>企业 / 货代公司名称 <span class="text-danger">*</span>:</label>
+            <input type="text" class="form-control" id="edit-tenant-name" required>
+          </div>
+          <div class="form-row" style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div class="form-group">
+              <label>单次成功调用单价 (¥0.01–¥100.00) <span class="text-danger">*</span>:</label>
+              <input type="number" step="0.01" min="0.01" max="100" class="form-control" id="edit-tenant-unit-price" required placeholder="0.50">
+            </div>
+            <div class="form-group">
+              <label>最大并发上限 (1–30 Worker) <span class="text-danger">*</span>:</label>
+              <input type="number" min="1" max="30" step="1" class="form-control" id="edit-tenant-concurrency" required placeholder="20">
+            </div>
+          </div>
+          <div class="form-row" style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div class="form-group">
+              <label>联系人电话:</label>
+              <input type="text" class="form-control font-mono" id="edit-tenant-phone" placeholder="选填">
+            </div>
+            <div class="form-group">
+              <label>账号运营状态:</label>
+              <select class="form-control" id="edit-tenant-status">
+                <option value="true">正常 (已开通)</option>
+                <option value="false">待审核 (未开通)</option>
+              </select>
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeModal('modal-edit-tenant')">取消</button>
+        <button type="button" class="btn btn-primary" id="btn-submit-edit-tenant">保存配置</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Recharge Balance -->
+  <div class="modal" id="modal-recharge">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>💰 租户账户余额充值</h3>
+        <button type="button" class="modal-close" onclick="closeModal('modal-recharge')">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <form id="form-recharge">
+          <input type="hidden" id="rc-tenant-id">
+          <div class="form-group">
+            <label>充值租户:</label>
+            <input type="text" class="form-control" id="rc-tenant-name" readonly>
+          </div>
+          <div class="form-group">
+            <label>充值金额 (¥0.01–¥1,000,000.00) *:</label>
+            <input type="number" step="0.01" min="0.01" max="1000000" class="form-control" id="rc-amount" required placeholder="例如: 500.00">
+          </div>
+          <div class="form-group">
+            <label>充值说明 / 流水单号:</label>
+            <input type="text" class="form-control" id="rc-desc" value="对公转账充值">
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeModal('modal-recharge')">取消</button>
+        <button type="button" class="btn btn-primary" id="btn-submit-recharge">确认充值</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: API Key Management -->
+  <div class="modal" id="modal-manage-keys">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <h3>🔑 租户 API Key 凭证与调用集成</h3>
+        <button type="button" class="modal-close" onclick="closeModal('modal-manage-keys')">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; background:rgba(255,255,255,0.03); padding:12px 16px; border-radius:10px; border:1px solid rgba(255,255,255,0.08);">
+          <div>
+            <div style="font-size:0.75rem; color:var(--text-muted);">当前企业租户:</div>
+            <strong id="keys-tenant-name" style="font-size:1.05rem; color:#fff;">-</strong>
+            <span class="font-mono text-muted" id="keys-tenant-id" style="font-size:0.75rem; margin-left:8px;">-</span>
+          </div>
+          <div>
+            <button type="button" class="btn btn-sm btn-primary" id="btn-create-new-key">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+              <span>生成新 API Key</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Newly Generated Key Alert Box -->
+        <div id="new-key-alert" style="display:none; background:rgba(16, 185, 129, 0.12); border:1px solid rgba(16, 185, 129, 0.35); border-radius:12px; padding:16px; margin-bottom:18px;">
+          <div style="color:#34d399; font-weight:600; font-size:0.9rem; margin-bottom:6px;">✨ 新 API Key 生成成功 (请立即复制保存，关闭后将不再显示完整密文):</div>
+          <div class="copy-input-group" style="margin-bottom:8px;">
+            <input type="text" id="new-key-full-val" class="form-control font-mono" readonly style="color:#38bdf8; font-weight:600;">
+            <button type="button" class="btn btn-primary" onclick="copyToClipboard(document.getElementById('new-key-full-val').value)">一键复制 Key</button>
+          </div>
+          <div style="font-size:0.75rem; color:var(--text-secondary);">Webhook 签名 Secret: <code id="new-key-secret-val" style="color:#fbbf24;"></code></div>
+        </div>
+
+        <div style="margin-bottom:8px; font-weight:600; font-size:0.85rem; color:var(--text-secondary);">现有 API 密钥列表:</div>
+        <div class="table-responsive" style="max-height:220px; overflow-y:auto; border:1px solid rgba(255,255,255,0.08); border-radius:10px; margin-bottom:16px;">
+          <table class="data-table" id="table-tenant-keys">
+            <thead>
+              <tr>
+                <th>密钥名称</th>
+                <th>API Key 前缀</th>
+                <th>Webhook 验签 Secret</th>
+                <th>状态</th>
+                <th>创建时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td colspan="6" class="text-center text-muted py-4">加载中...</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Integration Snippet -->
+        <div style="margin-top:12px;">
+          <div style="font-weight:600; font-size:0.85rem; color:var(--text-secondary); margin-bottom:6px;">快速对接 cURL 调用示例:</div>
+          <div class="json-viewer-container" style="max-height:130px; padding:10px 14px;">
+            <pre><code id="keys-curl-snippet" style="font-size:0.75rem; color:#a5f3fc;"></code></pre>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-primary" onclick="closeModal('modal-manage-keys')">完成并关闭</button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- Modal: Task Details & JSON Inspector -->
+  <div class="modal" id="modal-task-detail">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <h3 id="td-title">任务详情</h3>
+        <button class="modal-close" data-close="modal-task-detail">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="task-info-grid">
+          <div class="info-item"><span>任务ID:</span><strong id="td-id"></strong></div>
+          <div class="info-item"><span>租户ID:</span><strong id="td-tenant"></strong></div>
+          <div class="info-item"><span>状态:</span><span id="td-status-badge"></span></div>
+          <div class="info-item"><span>耗时:</span><strong id="td-duration"></strong></div>
+          <div class="info-item"><span>扣费金额:</span><strong id="td-charge"></strong></div>
+          <div class="info-item"><span>Webhook 回调:</span><span id="td-webhook"></span></div>
+        </div>
+        <div class="form-group mt-4">
+          <label>V3 结构化抽取 JSON 结果:</label>
+          <div class="json-viewer-container" style="max-height: 400px;">
+            <pre><code id="td-json-code"></code></pre>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" id="td-btn-copy-json">复制 JSON</button>
+        <button type="button" class="btn btn-primary" data-close="modal-task-detail">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Concurrency Stress Test -->
+  <div class="modal" id="modal-concurrency-test">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <h3>⚡ 多任务高并发压力测试</h3>
+        <button type="button" class="modal-close" data-close="modal-concurrency-test" aria-label="关闭并发压测窗口">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="alert alert-warning">
+          <strong>真实任务与扣费提示：</strong>压测会在下方指定租户中创建真实抽取任务，成功任务将按该租户单价扣费。
+        </div>
+        <form id="form-concurrency-test">
+          <div class="bench-target-panel">
+            <div class="form-group">
+              <label for="bench-tenant-select">压测目标租户 *</label>
+              <select class="form-control" id="bench-tenant-select" aria-describedby="bench-tenant-summary" required></select>
+            </div>
+            <p class="bench-target-summary" id="bench-tenant-summary">请选择承担任务与扣费的目标租户</p>
+          </div>
+
+          <div class="form-row bench-configuration-grid">
+            <div class="form-group">
+              <label for="bench-task-count">测试任务总数（封）</label>
+              <select class="form-control" id="bench-task-count">
+                <option value="5">5 封 (轻量快速体验)</option>
+                <option value="10" selected>10 封 (标准并发测试)</option>
+                <option value="20">20 封 (高并发削峰测试)</option>
+                <option value="50">50 封 (大客户批量压测)</option>
+                <option value="100">100 封 (极致并发压力)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="bench-concurrency-limit">客户端同时提交数</label>
+              <select class="form-control" id="bench-concurrency-limit">
+                <option value="5">5 并发</option>
+                <option value="10" selected>10 并发</option>
+                <option value="20">20 并发 (标准租户上限)</option>
+                <option value="30">30 并发 (平台允许上限)</option>
+              </select>
+            </div>
+          </div>
+        </form>
+
+        <div id="bench-progress-section" style="display:none; margin-top:16px;">
+          <div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:6px;">
+            <span id="bench-progress-text">正在排队处理: 0 / 0</span>
+            <strong id="bench-status-badge" class="text-warning">处理中...</strong>
+          </div>
+          <div style="width:100%; height:8px; background-color:var(--bg-surface-elevated); border-radius:4px; overflow:hidden;">
+            <div id="bench-progress-bar" style="width:0%; height:100%; background-color:var(--accent-primary); transition:width 0.3s ease;"></div>
+          </div>
+          <div class="json-viewer-container mt-3" style="max-height:180px; font-size:0.75rem;">
+            <pre><code id="bench-live-log">// 压测日志与实时对账明细将输出在此处...</code></pre>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-close="modal-concurrency-test">关闭</button>
+        <button type="button" class="btn btn-primary" id="btn-start-bench">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          <span>立即启动并发压测</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Global Modal: Custom Confirmation -->
+  <div class="modal" id="modal-global-confirm" style="z-index: 10050;">
+    <div class="modal-dialog" style="max-width: 440px;">
+      <div class="modal-body" style="padding: 28px 24px 20px; text-align: center;">
+        <div id="confirm-icon-box" class="icon-warning" style="width: 56px; height: 56px; border-radius: 50%; margin: 0 auto 16px; display: flex; align-items: center; justify-content: center;">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+        </div>
+        <h3 id="confirm-modal-title" style="font-size: 1.15rem; font-weight: 700; color: #fff; margin-bottom: 8px;">请确认操作</h3>
+        <p id="confirm-modal-message" style="font-size: 0.88rem; color: var(--text-secondary); line-height: 1.5; margin-bottom: 20px;"></p>
+        <div style="display: flex; gap: 10px; justify-content: center;">
+          <button type="button" class="btn btn-secondary" id="confirm-modal-cancel" style="min-width: 100px;">取消</button>
+          <button type="button" class="btn btn-primary" id="confirm-modal-ok" style="min-width: 100px;">确认</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Global Modal: Custom Prompt Input -->
+  <div class="modal" id="modal-global-prompt" style="z-index: 10050;">
+    <div class="modal-dialog" style="max-width: 460px;">
+      <div class="modal-header">
+        <h3 id="prompt-modal-title">请输入信息</h3>
+        <button type="button" class="modal-close" id="prompt-modal-close">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 20px 24px;">
+        <div class="form-group">
+          <label id="prompt-modal-label" style="margin-bottom: 8px; display: block; font-size: 0.86rem; color: var(--text-secondary);">输入内容:</label>
+          <input type="text" class="form-control" id="prompt-modal-input" style="font-size: 0.92rem; padding: 10px 14px;" autocomplete="off">
+        </div>
+      </div>
+      <div class="modal-footer" style="padding: 14px 24px;">
+        <button type="button" class="btn btn-secondary" id="prompt-modal-cancel">取消</button>
+        <button type="button" class="btn btn-primary" id="prompt-modal-ok">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="/static/js/app.js?v=20260819v22"></script>
+
+
+</body>
+</html>

@@ -1,0 +1,385 @@
+name: cargoplus
+
+x-app-environment: &app-environment
+  ENVIRONMENT: production
+  DEBUG: "false"
+  DATABASE_URL_FILE: /run/secrets/database_url
+  CELERY_BROKER_URL_FILE: /run/secrets/celery_broker_url
+  CELERY_RESULT_BACKEND_FILE: /run/secrets/celery_result_backend
+  REDIS_PASSWORD_FILE: /run/secrets/redis_password
+  TASK_QUEUE_MODE: celery
+  CELERY_QUEUE_NAME: cargo-extraction
+  CELERY_WEBHOOK_QUEUE_NAME: cargo-webhooks
+  WORKER_CONCURRENCY: ${CELERY_WORKER_CONCURRENCY:-4}
+  DEFAULT_TENANT_CONCURRENCY: ${DEFAULT_TENANT_CONCURRENCY:-4}
+  MAX_TENANT_PENDING_TASKS: ${MAX_TENANT_PENDING_TASKS:-500}
+  MAX_GLOBAL_PENDING_TASKS: ${MAX_GLOBAL_PENDING_TASKS:-5000}
+  TASK_LEASE_SECONDS: ${TASK_LEASE_SECONDS:-600}
+  TASK_RECOVERY_INTERVAL_SECONDS: ${TASK_RECOVERY_INTERVAL_SECONDS:-30}
+  BEAT_LOCK_TTL_SECONDS: ${BEAT_LOCK_TTL_SECONDS:-25}
+  LLM_API_KEY_FILE: /run/secrets/llm_api_key
+  LLM_BASE_URL: ${LLM_BASE_URL:?set LLM_BASE_URL}
+  LLM_MODEL: ${LLM_MODEL:?set LLM_MODEL}
+  LLM_FALLBACK_MODEL: ${LLM_FALLBACK_MODEL:-}
+  ADMIN_SECRET_KEY_FILE: /run/secrets/admin_secret
+  SESSION_SECRET_KEY_FILE: /run/secrets/session_secret
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?set CORS_ALLOWED_ORIGINS}
+  SKILL_V3_PATH: /opt/cargo-mail-extraction-skill-v3
+  UPLOAD_DIR: /app/data/uploads
+  SEED_DEMO_TENANT: "false"
+  METRICS_ENABLED: "true"
+
+x-app-secrets: &app-secrets
+  - database_url
+  - celery_broker_url
+  - celery_result_backend
+  - redis_password
+  - llm_api_key
+  - admin_secret
+  - session_secret
+
+x-app-hardening: &app-hardening
+  image: ${CARGOPLUS_IMAGE:-cargoplus-app:single-host}
+  restart: unless-stopped
+  init: true
+  read_only: true
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs:
+    - /tmp:size=512m,mode=1777
+  networks: [backend]
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cargo}
+      POSTGRES_USER: ${POSTGRES_USER:-cargo}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    security_opt: ["no-new-privileges:true"]
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command:
+      - sh
+      - -ec
+      - exec redis-server --appendonly yes --appendfsync everysec --requirepass "$$(tr -d '\r\n' < /run/secrets/redis_password)"
+    secrets:
+      - redis_password
+    volumes:
+      - redis_data:/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$(tr -d '\r\n' < /run/secrets/redis_password) redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    security_opt: ["no-new-privileges:true"]
+
+  api:
+    <<: *app-hardening
+    build:
+      context: ..
+      dockerfile: cargo_service/Dockerfile
+    environment: *app-environment
+    secrets: *app-secrets
+    volumes:
+      - uploads_data:/app/data/uploads
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  worker:
+    <<: *app-hardening
+    command: ["sh", "-c", "celery -A app.celery_app:celery_app worker --loglevel=INFO --concurrency=$${WORKER_CONCURRENCY} --queues=$${CELERY_QUEUE_NAME}"]
+    environment: *app-environment
+    secrets: *app-secrets
+    volumes:
+      - uploads_data:/app/data/uploads
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    stop_grace_period: 7m
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app:celery_app inspect ping --destination=celery@$${HOSTNAME} --timeout=3 | grep -q pong"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 30s
+
+  webhook-worker:
+    <<: *app-hardening
+    command: ["sh", "-c", "celery -A app.celery_app:celery_app worker --loglevel=INFO --concurrency=${CELERY_WEBHOOK_CONCURRENCY:-2} --queues=$${CELERY_WEBHOOK_QUEUE_NAME}"]
+    environment: *app-environment
+    secrets: *app-secrets
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    stop_grace_period: 1m
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app:celery_app inspect ping --destination=celery@$${HOSTNAME} --timeout=3 | grep -q pong"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 30s
+
+  beat:
+    <<: *app-hardening
+    command: ["celery", "-A", "app.celery_app:celery_app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
+    environment: *app-environment
+    secrets: *app-secrets
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    stop_grace_period: 30s
+
+  monitor:
+    <<: *app-hardening
+    command: ["uvicorn", "app.monitor:app", "--host", "0.0.0.0", "--port", "9100"]
+    environment: *app-environment
+    secrets: *app-secrets
+    volumes:
+      - type: bind
+        source: ${SINGLE_HOST_BACKUP_DIR:?set SINGLE_HOST_BACKUP_DIR}
+        target: /backups
+        read_only: true
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/health/live', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    environment:
+      SINGLE_HOST_HTTPS_HOST: ${SINGLE_HOST_HTTPS_HOST:?set SINGLE_HOST_HTTPS_HOST}
+    ports:
+      - "0.0.0.0:${HTTP_PORT:-80}:80"
+      - "0.0.0.0:${HTTPS_PORT:-443}:443"
+      - "0.0.0.0:${HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - ./deploy/single-host/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [backend]
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    security_opt: ["no-new-privileges:true"]
+
+  prometheus:
+    image: prom/prometheus:v3.7.3
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-lifecycle
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    networks: [backend]
+    depends_on:
+      api: {condition: service_healthy}
+      monitor: {condition: service_healthy}
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:9090/-/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+
+  alertmanager:
+    image: prom/alertmanager:v0.30.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ./deploy/single-host/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    networks: [backend]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:9093/-/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+
+  grafana:
+    image: grafana/grafana:12.3.1
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    secrets:
+      - grafana_admin_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks: [backend]
+    depends_on:
+      prometheus: {condition: service_started}
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000/api/health >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  postgres-backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_BACKUP_URL_FILE: /run/secrets/postgres_backup_url
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+    command: ["sh", "/opt/cargoplus/postgres_backup.sh"]
+    secrets:
+      - postgres_backup_url
+    volumes:
+      - ./scripts/postgres_backup.sh:/opt/cargoplus/postgres_backup.sh:ro
+      - type: bind
+        source: ${SINGLE_HOST_BACKUP_DIR:?set SINGLE_HOST_BACKUP_DIR}
+        target: /backups
+    networks: [backend]
+    depends_on:
+      postgres: {condition: service_healthy}
+    security_opt: ["no-new-privileges:true"]
+
+  redis-backup:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+    command: ["sh", "/opt/cargoplus/redis_backup.sh"]
+    secrets:
+      - redis_password
+    volumes:
+      - ./scripts/redis_backup.sh:/opt/cargoplus/redis_backup.sh:ro
+      - type: bind
+        source: ${SINGLE_HOST_BACKUP_DIR:?set SINGLE_HOST_BACKUP_DIR}
+        target: /backups
+    networks: [backend]
+    depends_on:
+      redis: {condition: service_healthy}
+    security_opt: ["no-new-privileges:true"]
+
+  restore-db:
+    image: postgres:16-alpine
+    profiles: ["restore-drill"]
+    environment:
+      POSTGRES_DB: cargo_restore
+      POSTGRES_USER: cargo_restore
+      POSTGRES_PASSWORD_FILE: /run/secrets/restore_drill_password
+    secrets:
+      - restore_drill_password
+    tmpfs:
+      - /var/lib/postgresql/data:size=2g
+    networks: [restore]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U cargo_restore -d cargo_restore"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  restore-drill:
+    image: postgres:16-alpine
+    profiles: ["restore-drill"]
+    environment:
+      BACKUP_DIR: /backups
+      PGHOST: restore-db
+      PGPORT: 5432
+      PGUSER: cargo_restore
+      PGDATABASE: cargo_restore
+      POSTGRES_PASSWORD_FILE: /run/secrets/restore_drill_password
+    command: ["sh", "/opt/cargoplus/postgres_restore_drill.sh"]
+    secrets:
+      - restore_drill_password
+    volumes:
+      - ./scripts/postgres_restore_drill.sh:/opt/cargoplus/postgres_restore_drill.sh:ro
+      - type: bind
+        source: ${SINGLE_HOST_BACKUP_DIR:?set SINGLE_HOST_BACKUP_DIR}
+        target: /backups
+    networks: [restore]
+    depends_on:
+      restore-db: {condition: service_healthy}
+    security_opt: ["no-new-privileges:true"]
+
+networks:
+  backend:
+  restore:
+    internal: true
+
+volumes:
+  postgres_data:
+  redis_data:
+  uploads_data:
+  prometheus_data:
+  alertmanager_data:
+  grafana_data:
+  caddy_data:
+  caddy_config:
+
+secrets:
+  postgres_password:
+    file: ./deploy/single-host/secrets/postgres_password
+  database_url:
+    file: ./deploy/single-host/secrets/database_url
+  postgres_backup_url:
+    file: ./deploy/single-host/secrets/postgres_backup_url
+  celery_broker_url:
+    file: ./deploy/single-host/secrets/celery_broker_url
+  celery_result_backend:
+    file: ./deploy/single-host/secrets/celery_result_backend
+  redis_password:
+    file: ./deploy/single-host/secrets/redis_password
+  llm_api_key:
+    file: ./deploy/single-host/secrets/llm_api_key
+  admin_secret:
+    file: ./deploy/single-host/secrets/admin_secret
+  session_secret:
+    file: ./deploy/single-host/secrets/session_secret
+  grafana_admin_password:
+    file: ./deploy/single-host/secrets/grafana_admin_password
+  restore_drill_password:
+    file: ./deploy/single-host/secrets/restore_drill_password

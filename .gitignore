@@ -1,0 +1,46 @@
+# Local secrets and environment overrides
+.env
+.env.*
+!.env.example
+!deploy/.env.production.example
+
+# Python environments and generated files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test, lint, and coverage caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local databases and runtime output
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.sqlite
+data/*.sqlite3
+data/backups/
+data/migration_*.json
+data/uploads/
+*.log
+deploy/.env.production
+deploy/secrets/*
+!deploy/secrets/*.example
+deploy/single-host/.env
+deploy/single-host/secrets/
+deploy/single-host/caddy-root.crt
+deploy/cloud/.env
+deploy/cloud/Caddyfile.active
+deploy/cloud/secrets/
+reports/
+
+# IDE and operating-system metadata
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

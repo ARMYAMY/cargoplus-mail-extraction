@@ -1,0 +1,40 @@
+{
+	admin off
+	default_sni {$SINGLE_HOST_HTTPS_HOST}
+	skip_install_trust
+}
+
+http://{$SINGLE_HOST_HTTPS_HOST} {
+	redir https://{$SINGLE_HOST_HTTPS_HOST}{uri} permanent
+}
+
+https://{$SINGLE_HOST_HTTPS_HOST} {
+	tls internal
+	encode zstd gzip
+
+	@internal_metrics path /metrics
+	respond @internal_metrics 404
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	request_body {
+		max_size 110MB
+	}
+
+	reverse_proxy api:8000 {
+		health_uri /health/ready
+		health_interval 15s
+		lb_try_duration 5s
+		transport http {
+			dial_timeout 3s
+			response_header_timeout 330s
+		}
+	}
+}

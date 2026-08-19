@@ -1,0 +1,277 @@
+import asyncio
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+import json
+import logging
+from pathlib import Path
+import time
+from typing import Optional
+import uuid
+from sqlalchemy import and_, or_, select, update
+from app.config import settings
+from app.database import AsyncSessionLocal
+from app.models.task import EmailTask
+from app.models.tenant import Tenant, ApiKey
+from app.schemas.task import SkillV3InputPayload
+from app.core.skill_runner import default_skill_runner
+from app.core.normalizer import default_normalizer
+from app.core.parser import process_uploaded_files
+from app.core.validator import default_validator
+from app.services.billing_service import BillingService
+from app.services.webhook_dispatcher import dispatch_webhook
+
+logger = logging.getLogger(__name__)
+
+
+def utc_now():
+    return datetime.now(timezone.utc)
+
+
+class ExtractionService:
+    @staticmethod
+    async def process_task(
+        task_id: str,
+        tenant_secret: Optional[str] = None,
+        lease_owner: Optional[str] = None,
+    ):
+        """
+        Executes the entire extraction pipeline for an email task.
+        """
+        start_time = time.time()
+        worker_id = lease_owner or f"local:{uuid.uuid4().hex}"
+        claim_time = utc_now()
+        lease_expires_at = claim_time + timedelta(seconds=settings.TASK_LEASE_SECONDS)
+        logger.info(f"Starting processing for task: {task_id}")
+
+        async with AsyncSessionLocal() as db:
+            claim = await db.execute(
+                update(EmailTask)
+                .where(
+                    EmailTask.id == task_id,
+                    or_(
+                        EmailTask.status == "PENDING",
+                        and_(
+                            EmailTask.status == "PROCESSING",
+                            or_(
+                                EmailTask.lease_expires_at.is_(None),
+                                EmailTask.lease_expires_at < claim_time,
+                            ),
+                        ),
+                    ),
+                )
+                .values(
+                    status="PROCESSING",
+                    started_at=claim_time,
+                    error_message=None,
+                    lease_owner=worker_id,
+                    lease_expires_at=lease_expires_at,
+                    attempt_count=EmailTask.attempt_count + 1,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if claim.rowcount != 1:
+                await db.rollback()
+                logger.info("Task %s was already claimed or is no longer pending", task_id)
+                return
+            await db.commit()
+
+            task = (await db.execute(select(EmailTask).where(EmailTask.id == task_id))).scalar_one()
+            tenant_active = (
+                await db.execute(select(Tenant.is_active).where(Tenant.id == task.tenant_id))
+            ).scalar_one_or_none()
+            if tenant_active is not True:
+                task.status = "FAILED"
+                task.error_message = "Tenant is inactive or no longer exists"
+                task.completed_at = utc_now()
+                task.lease_owner = None
+                task.lease_expires_at = None
+                await BillingService.release_task_reservation(db, task.tenant_id, task.id)
+                await db.commit()
+                return
+
+            tenant_id = task.tenant_id
+            callback_url = task.callback_url
+            input_type = task.input_type
+            raw_input_json = task.raw_input_json
+            file_paths_str = task.file_paths
+            mail_subject = task.mail_subject
+
+            # If tenant_secret wasn't passed, look it up from API key
+            if not tenant_secret:
+                key_stmt = select(ApiKey).where(ApiKey.tenant_id == tenant_id)
+                if task.api_key_id:
+                    key_stmt = key_stmt.where(ApiKey.id == task.api_key_id)
+                else:
+                    key_stmt = key_stmt.where(ApiKey.is_active == True)
+                key_res = await db.execute(key_stmt)
+                active_key = key_res.scalars().first()
+                tenant_secret = active_key.api_secret if active_key else None
+
+        billing_completed = False
+
+        # Step 1: Prepare Payload
+        try:
+            if input_type == "FILE" and file_paths_str:
+                stored_paths = json.loads(file_paths_str)
+                if not isinstance(stored_paths, list) or len(stored_paths) > settings.MAX_UPLOAD_FILES:
+                    raise ValueError("Invalid stored upload path list")
+                upload_root = settings.uploads_path.resolve()
+                file_paths = []
+                for stored_path in stored_paths:
+                    file_path = Path(stored_path).resolve()
+                    if not file_path.is_relative_to(upload_root) or not file_path.is_file():
+                        raise ValueError("Stored upload path is missing or outside the upload directory")
+                    file_paths.append(file_path)
+                payload = await asyncio.to_thread(
+                    process_uploaded_files,
+                    file_paths=file_paths,
+                    subject=mail_subject or "",
+                    body="",
+                    temp_dir=settings.uploads_path,
+                )
+            else:
+                raw_dict = json.loads(raw_input_json or "{}")
+                payload = SkillV3InputPayload(**raw_dict)
+
+
+            # Step 2: Extract Draft JSON using SenseTime LLM
+            draft_json = await default_skill_runner.extract_draft_json(payload)
+
+            # Step 3: Normalize with Skill V3 Rules
+            final_v3_json = default_normalizer.normalize(draft_json)
+            is_valid, validation_errors = default_validator.validate(final_v3_json)
+            if not is_valid:
+                details = "; ".join(validation_errors[:5])
+                raise ValueError(f"Normalized output failed V3 schema validation: {details}")
+
+            # Step 4: Record Success & Deduct Balance
+            duration_ms = int((time.time() - start_time) * 1000)
+
+            async with AsyncSessionLocal() as db:
+                task_stmt = select(EmailTask).where(EmailTask.id == task_id)
+                task_res = await db.execute(task_stmt)
+                current_task = task_res.scalar_one()
+                if current_task.status != "PROCESSING" or current_task.lease_owner != worker_id:
+                    logger.warning("Task %s lease is no longer owned by %s", task_id, worker_id)
+                    await db.rollback()
+                    return
+
+                current_task.status = "SUCCESS"
+                current_task.result_json = json.dumps(final_v3_json, ensure_ascii=False)
+                current_task.duration_ms = duration_ms
+                current_task.completed_at = utc_now()
+                current_task.lease_owner = None
+                current_task.lease_expires_at = None
+                await db.flush()
+
+                # Billing commits the result and deduction in the same database transaction.
+                billing_tx = await BillingService.deduct_for_task_success(db, tenant_id, task_id)
+                if billing_tx is None:
+                    raise RuntimeError("Insufficient balance or duplicate billing prevented task finalization")
+                billing_completed = True
+                await db.refresh(current_task)
+
+                # Send Webhook notification
+                if callback_url:
+                    try:
+                        webhook_data = {
+                            "event": "task.completed",
+                            "task_id": task_id,
+                            "tenant_id": tenant_id,
+                            "status": "SUCCESS",
+                            "duration_ms": duration_ms,
+                            "charged_amount": float(current_task.charged_amount),
+                            "data": final_v3_json,
+                            "error": None,
+                            "timestamp": int(time.time() * 1000),
+                        }
+                        current_task.callback_status = await dispatch_webhook(
+                            db=db,
+                            task_id=task_id,
+                            callback_url=callback_url,
+                            tenant_secret=tenant_secret,
+                            payload=webhook_data,
+                        )
+                        await db.commit()
+                    except Exception as webhook_error:
+                        await db.rollback()
+                        logger.error("Webhook finalization failed for task %s: %s", task_id, webhook_error)
+                        await db.execute(
+                            update(EmailTask)
+                            .where(EmailTask.id == task_id)
+                            .values(callback_status="FAILED")
+                        )
+                        await db.commit()
+
+            logger.info(f"Task {task_id} completed successfully in {duration_ms}ms")
+
+        except asyncio.CancelledError:
+            async with AsyncSessionLocal() as db:
+                await db.execute(
+                    update(EmailTask)
+                    .where(
+                        EmailTask.id == task_id,
+                        EmailTask.status == "PROCESSING",
+                        EmailTask.lease_owner == worker_id,
+                    )
+                    .values(
+                        status="PENDING",
+                        started_at=None,
+                        lease_owner=None,
+                        lease_expires_at=None,
+                        last_dispatched_at=None,
+                    )
+                )
+                await db.commit()
+            raise
+        except Exception as e:
+            duration_ms = int((time.time() - start_time) * 1000)
+            err_msg = str(e)[:2000]
+            logger.error(f"Task {task_id} failed after {duration_ms}ms: {err_msg}", exc_info=True)
+
+            # Once the atomic success+charge transaction committed, later bookkeeping
+            # failures must not rewrite the task as uncharged/failed.
+            if billing_completed:
+                return
+
+            async with AsyncSessionLocal() as db:
+                task_stmt = select(EmailTask).where(EmailTask.id == task_id)
+                task_res = await db.execute(task_stmt)
+                current_task = task_res.scalar_one_or_none()
+                if current_task:
+                    if current_task.lease_owner != worker_id:
+                        logger.warning("Ignoring stale failure from former task lease owner %s", worker_id)
+                        await db.rollback()
+                        return
+                    current_task.status = "FAILED"
+                    current_task.error_message = err_msg
+                    current_task.duration_ms = duration_ms
+                    current_task.completed_at = utc_now()
+                    current_task.lease_owner = None
+                    current_task.lease_expires_at = None
+                    if not current_task.is_charged:
+                        current_task.charged_amount = Decimal("0.0000")
+                    await BillingService.release_task_reservation(db, tenant_id, task_id)
+                    await db.commit()
+
+                    # Send Webhook error notification
+                    if callback_url:
+                        webhook_data = {
+                            "event": "task.failed",
+                            "task_id": task_id,
+                            "tenant_id": tenant_id,
+                            "status": "FAILED",
+                            "duration_ms": duration_ms,
+                            "charged_amount": 0.0,
+                            "data": None,
+                            "error": err_msg,
+                            "timestamp": int(time.time() * 1000),
+                        }
+                        current_task.callback_status = await dispatch_webhook(
+                            db=db,
+                            task_id=task_id,
+                            callback_url=callback_url,
+                            tenant_secret=tenant_secret,
+                            payload=webhook_data,
+                        )
+                        await db.commit()
