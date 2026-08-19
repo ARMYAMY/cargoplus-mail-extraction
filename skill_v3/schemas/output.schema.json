@@ -1,0 +1,304 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CargoPlus Final JSON Output V3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ShipperName",
+    "ShipperAddr",
+    "ShipperTel",
+    "ShipperEmail",
+    "ShipperFax",
+    "ConsigneeName",
+    "ConsigneeAddr",
+    "ConsigneeTel",
+    "ConsigneeEmail",
+    "ConsigneeFax",
+    "NotifyName",
+    "NotifyAddr",
+    "NotifyTel",
+    "NotifyEmail",
+    "NotifyFax",
+    "POR",
+    "PORName",
+    "POL",
+    "POLName",
+    "POD",
+    "PODName",
+    "TransPort",
+    "DeliveryCode",
+    "DeliveryName",
+    "ETD",
+    "ETA",
+    "Vessel",
+    "Voyage",
+    "CutOffDate",
+    "SICutOff",
+    "ContainerInfo",
+    "TotalContainerQty",
+    "GoodsName",
+    "GoodsNameCN",
+    "Marks",
+    "HSCode",
+    "Packages",
+    "PackagesUnit",
+    "GrossWeight",
+    "GrossWeightUnit",
+    "NetWeight",
+    "NetWeightUnit",
+    "Volume",
+    "VolumeUnit",
+    "Incoterms",
+    "Movement",
+    "PackingMode",
+    "GoodsType",
+    "FreightTerm",
+    "Carrier",
+    "IsTrucking",
+    "IsCustomsDeclare",
+    "ReleaseBLType",
+    "BookingNo",
+    "BLNo",
+    "ContractNo",
+    "Remark"
+  ],
+  "properties": {
+    "ShipperName": {
+      "type": "string"
+    },
+    "ShipperAddr": {
+      "type": "string"
+    },
+    "ShipperTel": {
+      "type": "string"
+    },
+    "ShipperEmail": {
+      "type": "string"
+    },
+    "ShipperFax": {
+      "type": "string"
+    },
+    "ConsigneeName": {
+      "type": "string"
+    },
+    "ConsigneeAddr": {
+      "type": "string"
+    },
+    "ConsigneeTel": {
+      "type": "string"
+    },
+    "ConsigneeEmail": {
+      "type": "string"
+    },
+    "ConsigneeFax": {
+      "type": "string"
+    },
+    "NotifyName": {
+      "type": "string"
+    },
+    "NotifyAddr": {
+      "type": "string"
+    },
+    "NotifyTel": {
+      "type": "string"
+    },
+    "NotifyEmail": {
+      "type": "string"
+    },
+    "NotifyFax": {
+      "type": "string"
+    },
+    "POR": {
+      "type": "string"
+    },
+    "PORName": {
+      "type": "string"
+    },
+    "POL": {
+      "type": "string"
+    },
+    "POLName": {
+      "type": "string"
+    },
+    "POD": {
+      "type": "string"
+    },
+    "PODName": {
+      "type": "string"
+    },
+    "TransPort": {
+      "type": "string"
+    },
+    "DeliveryCode": {
+      "type": "string"
+    },
+    "DeliveryName": {
+      "type": "string"
+    },
+    "ETD": {
+      "type": "string"
+    },
+    "ETA": {
+      "type": "string"
+    },
+    "Vessel": {
+      "type": "string"
+    },
+    "Voyage": {
+      "type": "string"
+    },
+    "CutOffDate": {
+      "type": "string"
+    },
+    "SICutOff": {
+      "type": "string"
+    },
+    "ContainerInfo": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ContainerNo",
+          "SealNo",
+          "ContSize",
+          "ContType",
+          "KGS",
+          "KGSunit",
+          "PCS",
+          "Package",
+          "CBM",
+          "CBMunit",
+          "HSCode",
+          "GoodsName",
+          "GoodsNameCN"
+        ],
+        "properties": {
+          "ContainerNo": {
+            "type": "string"
+          },
+          "SealNo": {
+            "type": "string"
+          },
+          "ContSize": {
+            "type": "string"
+          },
+          "ContType": {
+            "type": "string"
+          },
+          "KGS": {
+            "type": "string"
+          },
+          "KGSunit": {
+            "type": "string"
+          },
+          "PCS": {
+            "type": "string"
+          },
+          "Package": {
+            "type": "string"
+          },
+          "CBM": {
+            "type": "string"
+          },
+          "CBMunit": {
+            "type": "string"
+          },
+          "HSCode": {
+            "type": "string"
+          },
+          "GoodsName": {
+            "type": "string"
+          },
+          "GoodsNameCN": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "TotalContainerQty": {
+      "type": "string"
+    },
+    "GoodsName": {
+      "type": "string"
+    },
+    "GoodsNameCN": {
+      "type": "string"
+    },
+    "Marks": {
+      "type": "string"
+    },
+    "HSCode": {
+      "type": "string"
+    },
+    "Packages": {
+      "type": "string"
+    },
+    "PackagesUnit": {
+      "type": "string"
+    },
+    "GrossWeight": {
+      "type": "string"
+    },
+    "GrossWeightUnit": {
+      "type": "string"
+    },
+    "NetWeight": {
+      "type": "string"
+    },
+    "NetWeightUnit": {
+      "type": "string"
+    },
+    "Volume": {
+      "type": "string"
+    },
+    "VolumeUnit": {
+      "type": "string"
+    },
+    "Incoterms": {
+      "type": "string"
+    },
+    "Movement": {
+      "type": "string"
+    },
+    "PackingMode": {
+      "type": "string"
+    },
+    "GoodsType": {
+      "type": "string",
+      "enum": [
+        "S",
+        "R",
+        "D",
+        "O"
+      ]
+    },
+    "FreightTerm": {
+      "type": "string"
+    },
+    "Carrier": {
+      "type": "string"
+    },
+    "IsTrucking": {
+      "type": "string"
+    },
+    "IsCustomsDeclare": {
+      "type": "string"
+    },
+    "ReleaseBLType": {
+      "type": "string"
+    },
+    "BookingNo": {
+      "type": "string"
+    },
+    "BLNo": {
+      "type": "string"
+    },
+    "ContractNo": {
+      "type": "string"
+    },
+    "Remark": {
+      "type": "string"
+    }
+  }
+}

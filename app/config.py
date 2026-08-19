@@ -198,10 +198,20 @@ class Settings(BaseSettings):
 
     @property
     def skill_path(self) -> Path:
-        p = Path(self.SKILL_V3_PATH)
-        if not p.is_absolute():
-            p = (BASE_DIR / p).resolve()
-        return p
+        candidates = [
+            Path(self.SKILL_V3_PATH),
+            BASE_DIR / self.SKILL_V3_PATH,
+            BASE_DIR / "skill_v3",
+            BASE_DIR / "data" / "skill_v3",
+            BASE_DIR.parent / "cargo-mail-extraction-skill-v3",
+        ]
+        for c in candidates:
+            resolved = c.resolve() if not c.is_absolute() else c
+            if resolved.exists() and (resolved / "prompts").exists():
+                return resolved
+        fallback = (BASE_DIR / "skill_v3").resolve()
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
 
     @property
     def uploads_path(self) -> Path:

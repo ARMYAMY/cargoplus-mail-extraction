@@ -20,6 +20,24 @@ class NonRetryableLLMError(RuntimeError):
     pass
 
 
+DEFAULT_EXTRACT_PROMPT = """你是一个专业的国际海运货代单证结构化抽取专家。
+请从以下邮件与单证中精准抽取 57 个核心字段，输出符合 CargoPlus V3 规范的标准 JSON。
+
+邮件主题: {{mail_subject}}
+邮件正文: {{mail_body}}
+附件与单证内容:
+{{attachments_text}}
+"""
+
+DEFAULT_VALIDATE_PROMPT = """请根据以下校验错误修正并完善提取的 JSON 数据:
+原始 JSON:
+{{raw_json}}
+
+错误列表:
+{{errors}}
+"""
+
+
 class SkillRunner:
     def __init__(self, skill_path: Optional[Path] = None):
         self.skill_path = skill_path or settings.skill_path
@@ -32,14 +50,14 @@ class SkillRunner:
         if extract_file.exists():
             self.extract_prompt_template = extract_file.read_text(encoding="utf-8")
         else:
-            logger.warning(f"extract.md prompt not found at {extract_file}")
-            self.extract_prompt_template = ""
+            logger.warning(f"extract.md prompt not found at {extract_file}, using built-in fallback")
+            self.extract_prompt_template = DEFAULT_EXTRACT_PROMPT
 
         if validate_file.exists():
             self.validate_prompt_template = validate_file.read_text(encoding="utf-8")
         else:
-            logger.warning(f"validate.md prompt not found at {validate_file}")
-            self.validate_prompt_template = ""
+            logger.warning(f"validate.md prompt not found at {validate_file}, using built-in fallback")
+            self.validate_prompt_template = DEFAULT_VALIDATE_PROMPT
 
     def format_attachments_text(self, attachments: List[AttachmentInput]) -> str:
         if not attachments:

@@ -1,0 +1,314 @@
+{
+  "CONT_TYPE": [
+    {
+      "code": "FR",
+      "value": "FR",
+      "cn": "FR",
+      "en": "FR"
+    },
+    {
+      "code": "GP",
+      "value": "GP",
+      "cn": "GP",
+      "en": "GP"
+    },
+    {
+      "code": "HD",
+      "value": "HD",
+      "cn": "HD",
+      "en": "HD"
+    },
+    {
+      "code": "HH",
+      "value": "HH",
+      "cn": "HH",
+      "en": "HH"
+    },
+    {
+      "code": "HQ",
+      "value": "HQ",
+      "cn": "HQ",
+      "en": "HQ"
+    },
+    {
+      "code": "HT",
+      "value": "HT",
+      "cn": "HT",
+      "en": "HT"
+    },
+    {
+      "code": "NOR",
+      "value": "NOR",
+      "cn": "NOR",
+      "en": "NOR"
+    },
+    {
+      "code": "NR",
+      "value": "NR",
+      "cn": "NR",
+      "en": "NR"
+    },
+    {
+      "code": "OH",
+      "value": "OH",
+      "cn": "OH",
+      "en": "OH"
+    },
+    {
+      "code": "OS",
+      "value": "OS",
+      "cn": "OS",
+      "en": "OS"
+    },
+    {
+      "code": "OT",
+      "value": "OT",
+      "cn": "OT",
+      "en": "OT"
+    },
+    {
+      "code": "PC",
+      "value": "PC",
+      "cn": "PF",
+      "en": "PF"
+    }
+  ],
+  "CONT_SIZE": [
+    {
+      "code": "20'",
+      "value": "20",
+      "cn": "20'",
+      "en": "20'"
+    },
+    {
+      "code": "40'",
+      "value": "40",
+      "cn": "40'",
+      "en": "40'"
+    },
+    {
+      "code": "45'",
+      "value": "45",
+      "cn": "45'",
+      "en": "45'"
+    },
+    {
+      "code": "LCL",
+      "value": "LCL",
+      "cn": "LCL",
+      "en": "LCL"
+    }
+  ],
+  "GoodsPackage": [
+    {
+      "code": "02",
+      "value": "02",
+      "cn": "PLTS",
+      "en": "PLTS"
+    },
+    {
+      "code": "BAGS",
+      "value": "BAGS",
+      "cn": "BAG",
+      "en": "BAG"
+    },
+    {
+      "code": "BALE",
+      "value": "BALE",
+      "cn": "BALE",
+      "en": "BALE"
+    },
+    {
+      "code": "BALES",
+      "value": "BALES",
+      "cn": "BALES",
+      "en": "BALES"
+    },
+    {
+      "code": "BOXES",
+      "value": "BOXES",
+      "cn": "BOXES",
+      "en": "BOXES"
+    },
+    {
+      "code": "BUNDLES",
+      "value": "BUNDLES",
+      "cn": "BUNDLES",
+      "en": "BUNDLES"
+    },
+    {
+      "code": "Carton",
+      "value": "Carton",
+      "cn": "Carton",
+      "en": "Carton"
+    },
+    {
+      "code": "CARTONS",
+      "value": "CARTONS",
+      "cn": "CARTONS",
+      "en": "CARTONS"
+    },
+    {
+      "code": "CASES",
+      "value": "CASES",
+      "cn": "CASES",
+      "en": "CASES"
+    },
+    {
+      "code": "CL",
+      "value": "CL",
+      "cn": "卷",
+      "en": "COILS"
+    },
+    {
+      "code": "CRATES",
+      "value": "CRATES",
+      "cn": "CRATES",
+      "en": "CRATES"
+    },
+    {
+      "code": "danwei",
+      "value": "danwei",
+      "cn": "单位",
+      "en": "danwei"
+    },
+    {
+      "code": "danwei01",
+      "value": "danwei01",
+      "cn": "单位",
+      "en": "danwei01"
+    },
+    {
+      "code": "DRUMS",
+      "value": "DRUMS",
+      "cn": "DRUMS",
+      "en": "DRUMS"
+    },
+    {
+      "code": "IBCT",
+      "value": "IBCT",
+      "cn": "IBC TANKS",
+      "en": "IBC TANKS"
+    },
+    {
+      "code": "LOT",
+      "value": "LOT",
+      "cn": "LOT",
+      "en": "LOT"
+    },
+    {
+      "code": "LOTS",
+      "value": "LOTS",
+      "cn": "LOTS",
+      "en": "LOTS"
+    },
+    {
+      "code": "LUCK",
+      "value": "LUCK",
+      "cn": "幸运",
+      "en": "LUCK"
+    },
+    {
+      "code": "PACKAGE",
+      "value": "PACKAGE",
+      "cn": "PACKAGE",
+      "en": "PACKAGE"
+    },
+    {
+      "code": "PAG",
+      "value": "PAG",
+      "cn": "PACKAGES",
+      "en": "PACKAGES"
+    },
+    {
+      "code": "PALLET",
+      "value": "PALLET",
+      "cn": "PALLET",
+      "en": "PALLET"
+    },
+    {
+      "code": "PALLETS",
+      "value": "PALLETS",
+      "cn": "PALLETS",
+      "en": "PALLETS"
+    },
+    {
+      "code": "PIECE",
+      "value": "PIECE",
+      "cn": "PIECE",
+      "en": "PIECE"
+    },
+    {
+      "code": "PIECES",
+      "value": "PIECES",
+      "cn": "PIECES",
+      "en": "PIECES"
+    },
+    {
+      "code": "PKG",
+      "value": "PKG",
+      "cn": "PKG",
+      "en": "PKG"
+    },
+    {
+      "code": "PLYWOOD CASE",
+      "value": "PLYWOOD CASE",
+      "cn": "PLYWOOD CASE",
+      "en": "PLYWOOD CASE"
+    },
+    {
+      "code": "PLYWOOD CASES",
+      "value": "PLYWOOD CASES",
+      "cn": "PLYWOOD CASES",
+      "en": "PLYWOOD CASES"
+    },
+    {
+      "code": "REELS",
+      "value": "REELS",
+      "cn": "REELS",
+      "en": "REELS"
+    },
+    {
+      "code": "ROLL",
+      "value": "ROLL",
+      "cn": "ROLL",
+      "en": "ROLL"
+    },
+    {
+      "code": "ROLLS",
+      "value": "ROLLS",
+      "cn": "ROLLS",
+      "en": "ROLLS"
+    },
+    {
+      "code": "SETS",
+      "value": "SETS",
+      "cn": "SETS",
+      "en": "SETS"
+    },
+    {
+      "code": "WOODEN CASE",
+      "value": "WOODEN CASE",
+      "cn": "木托",
+      "en": "WOODEN CASE"
+    },
+    {
+      "code": "WOODEN CASES",
+      "value": "WOODEN CASES",
+      "cn": "WOODEN CASES",
+      "en": "WOODEN CASES"
+    },
+    {
+      "code": "WOODEN CRATES",
+      "value": "WOODEN CRATES",
+      "cn": "WOODEN CRATES",
+      "en": "WOODEN CRATES"
+    },
+    {
+      "code": "WOODEN PALLETS",
+      "value": "WOODEN PALLETS",
+      "cn": "WOODEN PALLETS",
+      "en": "WOODEN PALLETS"
+    }
+  ]
+}

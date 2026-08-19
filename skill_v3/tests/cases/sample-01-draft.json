@@ -1,0 +1,32 @@
+{
+  "ShipperName": "ABC TRADING CO., LTD.",
+  "ShipperAddr": "ADD: NO.1 ROAD, SHENZHEN, CHINA\nTEL: +86 755 12345678\nFAX: 0755-88889999\nEMAIL: ops@example.com",
+  "ConsigneeName": "XYZ IMPORT PTY LTD",
+  "ConsigneeAddr": "100 TEST STREET, MELBOURNE\nEMAIL: import@example.com",
+  "NotifyName": "SAME AS CONSIGNEE",
+  "NotifyAddr": "SAME AS CONSIGNEE\nTEL: +61 3 9000 0000",
+  "POLName": "YANTIAN",
+  "PODName": "MELBOURNE",
+  "ETD": "2023/8/11",
+  "Vessel": "KOTA TEST",
+  "Voyage": "001S",
+  "ContainerInfo": [
+    {
+      "ContainerNo": "ABCU1234567",
+      "SealNo": "SEAL123",
+      "ContSize": "40HQ",
+      "KGS": "9,170.000 KGS",
+      "PCS": "501 PACKAGES",
+      "CBM": "68.000 CBM",
+      "HSCode": "3924900000",
+      "GoodsName": "DAILY NECESSITIES 日用品"
+    }
+  ],
+  "GoodsName": "DAILY NECESSITIES 日用品",
+  "HSCode": "3924900000",
+  "Packages": "501 PACKAGES",
+  "GrossWeight": "9,170.000 KGS",
+  "Volume": "68.000 CBM",
+  "BookingNo": "BK123456",
+  "unexpected": "remove"
+}

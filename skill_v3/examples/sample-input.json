@@ -1,0 +1,13 @@
+{
+  "mail_subject": "Booking BK123456 - Yantian to Melbourne",
+  "mail_body": "Please arrange booking. Freight prepaid.",
+  "attachments": [
+    {
+      "filename": "booking.pdf",
+      "content_type": "application/pdf",
+      "text": "SHIPPER: ABC TRADING CO., LTD.\nADD: NO.1 ROAD, SHENZHEN, CHINA\nTEL: +86 755 12345678\nFAX: 0755-88889999\nEMAIL: ops@example.com\nCONSIGNEE: XYZ IMPORT PTY LTD\n100 TEST STREET, MELBOURNE\nEMAIL: import@example.com\nNOTIFY: SAME AS CONSIGNEE\nTEL: +61 3 9000 0000\nPOL: YANTIAN\nPOD: MELBOURNE\nVESSEL/VOYAGE: KOTA TEST / 001S\nETD: 2023/8/11\nBOOKING NO: BK123456\nCONTAINER: ABCU1234567 / SEAL123 / 40HQ\nGOODS: DAILY NECESSITIES 日用品\nHS CODE: 3924900000\nPACKAGES: 501 PACKAGES\nG.W.: 9,170.000 KGS\nMEAS: 68.000 CBM",
+      "tables": [],
+      "ocr_text": ""
+    }
+  ]
+}
