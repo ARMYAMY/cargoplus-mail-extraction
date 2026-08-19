@@ -116,8 +116,8 @@ services:
   api:
     <<: *app-hardening
     build:
-      context: ..
-      dockerfile: cargo_service/Dockerfile
+      context: .
+      dockerfile: Dockerfile
     environment: *app-environment
     secrets: *app-secrets
     volumes:

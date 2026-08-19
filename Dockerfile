@@ -13,12 +13,12 @@ RUN (sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debi
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 cargo
 
-COPY cargo_service/requirements.txt cargo_service/requirements.lock /app/
+COPY requirements.txt requirements.lock /app/
 RUN python -m pip install -i https://mirrors.aliyun.com/pypi/simple/ --no-deps -r /app/requirements.lock \
     && python -m pip uninstall -y pip setuptools wheel jaraco.context
 
-COPY --chown=cargo:cargo cargo_service/app /app/app
-COPY --chown=cargo:cargo cargo-mail-extraction-skill-v3 /opt/cargo-mail-extraction-skill-v3
+COPY --chown=cargo:cargo app /app/app
+COPY --chown=cargo:cargo skill_v3 /opt/cargo-mail-extraction-skill-v3
 
 RUN mkdir -p /app/data/uploads \
     && chown -R cargo:cargo /app/data
