@@ -24,11 +24,46 @@ router = APIRouter(prefix="/auth", tags=["Authentication & Registration"])
 
 
 
+COMMON_WEAK_PASSWORDS = {
+    "1234567890", "0123456789", "abcdefghij", "password123", "password1234",
+    "admin123456", "root1234567", "qwertyuiop", "1111111111", "0000000000",
+}
+
+
+def is_sequential_chars(s: str) -> bool:
+    if len(s) < 4:
+        return False
+    forward = all(ord(s[i + 1]) - ord(s[i]) == 1 for i in range(len(s) - 1))
+    backward = all(ord(s[i]) - ord(s[i + 1]) == 1 for i in range(len(s) - 1))
+    return forward or backward
+
+
 class TenantRegisterRequest(BaseModel):
     company_name: str = Field(..., min_length=2, max_length=128, description="货代企业名称")
     contact_email: str = Field(..., min_length=5, max_length=128, description="联系人邮箱")
     contact_phone: Optional[str] = Field(None, max_length=32, description="联系电话")
     password: str = Field(..., min_length=10, max_length=128, description="登录密码")
+
+    @field_validator("password")
+    @classmethod
+    def validate_strong_password(cls, value: str) -> str:
+        if len(value) < 10:
+            raise ValueError("密码长度至少须为 10 位")
+        if not re.search(r"[A-Za-z]", value) or not re.search(r"[0-9]", value):
+            raise ValueError("密码强度不足：须同时包含字母与数字")
+        if len(set(value)) < 4:
+            raise ValueError("密码过于简单：不能包含过多重复字符")
+        if value.lower() in COMMON_WEAK_PASSWORDS or is_sequential_chars(value.lower()):
+            raise ValueError("密码过于简单：禁止使用常用弱密码或连续递增字符")
+        return value
+
+    @field_validator("contact_phone")
+    @classmethod
+    def validate_contact_phone(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped if stripped else None
 
     @field_validator("contact_email")
     @classmethod
@@ -55,6 +90,19 @@ async def register_tenant(
     req: TenantRegisterRequest,
     db: AsyncSession = Depends(get_db),
 ):
+    # Check if company name is already registered
+    normalized_company = req.company_name.strip()
+    check_name_stmt = select(Tenant.id).where(func.lower(Tenant.name) == normalized_company.lower()).limit(1)
+    res_name = await db.execute(check_name_stmt)
+    if res_name.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": 40002,
+                "message": f"企业名称「{req.company_name}」已被注册。若为同集团/分公司，请添加部门后缀（例如：{req.company_name}-深圳分部），或联系企业管理员加入。",
+            },
+        )
+
     # Check if email is already registered
     normalized_email = req.contact_email.strip().lower()
     check_stmt = select(Tenant.id).where(func.lower(Tenant.contact_email) == normalized_email).limit(1)

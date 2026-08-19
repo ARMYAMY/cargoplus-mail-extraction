@@ -67,16 +67,29 @@ async def test_auth_registration_and_login_lifecycle():
         raw_key = reg_data["api_key"]
         assert raw_key.startswith("cg_")
 
-        # Duplicate email/company registration rejection
-        res_dup = await client.post(
+        # Duplicate company registration rejection (same company, different email)
+        res_dup_company = await client.post(
             "/api/v1/auth/register",
             json={
                 "company_name": company_name,
+                "contact_email": f"other_{uuid.uuid4().hex[:6]}@example.com",
+                "password": pwd,
+            },
+        )
+        assert res_dup_company.status_code == 400
+        assert res_dup_company.json()["detail"]["code"] == 40002
+
+        # Duplicate email registration rejection (different company, same email)
+        res_dup_email = await client.post(
+            "/api/v1/auth/register",
+            json={
+                "company_name": f"OtherCo_{uuid.uuid4().hex[:6]}",
                 "contact_email": email,
                 "password": pwd,
             },
         )
-        assert res_dup.status_code == 400
+        assert res_dup_email.status_code == 400
+        assert res_dup_email.json()["detail"]["code"] == 40001
 
         # 2. Inactive login attempt (default registration is pending audit)
         res_inactive_login = await client.post(

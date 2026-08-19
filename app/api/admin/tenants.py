@@ -36,6 +36,18 @@ async def create_tenant(
     data: TenantCreate,
     db: AsyncSession = Depends(get_db),
 ):
+    if data.name:
+        dup_name = await db.execute(
+            select(Tenant.id)
+            .where(func.lower(Tenant.name) == data.name.strip().lower())
+            .limit(1)
+        )
+        if dup_name.scalar_one_or_none() is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": 40902, "message": f"企业名称「{data.name}」已存在，请使用带有分支或部门标识的唯一名称"},
+            )
+
     if data.contact_email:
         duplicate = await db.execute(
             select(Tenant.id)
@@ -49,7 +61,7 @@ async def create_tenant(
             )
 
     tenant = Tenant(
-        name=data.name,
+        name=data.name.strip(),
         contact_email=data.contact_email.strip().lower() if data.contact_email else None,
         contact_phone=data.contact_phone,
         unit_price=data.unit_price,
@@ -63,7 +75,7 @@ async def create_tenant(
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={"code": 40901, "message": "Contact email is already registered"},
+            detail={"code": 40901, "message": "Contact email or name is already registered"},
         )
     await db.refresh(tenant)
 
@@ -109,7 +121,22 @@ async def update_tenant(
         raise HTTPException(status_code=404, detail="Tenant not found")
 
     if data.name is not None:
-        tenant.name = data.name.strip()
+        trimmed_name = data.name.strip()
+        if trimmed_name != tenant.name:
+            dup_name = await db.execute(
+                select(Tenant.id)
+                .where(
+                    Tenant.id != tenant_id,
+                    func.lower(Tenant.name) == trimmed_name.lower(),
+                )
+                .limit(1)
+            )
+            if dup_name.scalar_one_or_none() is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"code": 40902, "message": f"企业名称「{trimmed_name}」已存在，请使用唯一名称"},
+                )
+            tenant.name = trimmed_name
     if data.contact_phone is not None:
         tenant.contact_phone = data.contact_phone.strip()
     if data.unit_price is not None:

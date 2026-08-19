@@ -106,7 +106,7 @@ class Settings(BaseSettings):
     TENANT_LOGIN_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=300, ge=10, le=86400)
     ADMIN_LOGIN_RATE_LIMIT_ATTEMPTS: int = Field(default=5, ge=1, le=100)
     ADMIN_LOGIN_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=300, ge=10, le=86400)
-    REGISTER_RATE_LIMIT_ATTEMPTS: int = Field(default=5, ge=1, le=100)
+    REGISTER_RATE_LIMIT_ATTEMPTS: int = Field(default=10, ge=1, le=500)
     REGISTER_RATE_LIMIT_WINDOW_SECONDS: int = Field(default=3600, ge=60, le=86400)
     SEED_DEMO_TENANT: bool = False
     METRICS_ENABLED: bool = False
@@ -182,9 +182,9 @@ class Settings(BaseSettings):
             if "*" in self.cors_allowed_origins:
                 raise RuntimeError("Wildcard CORS origins are forbidden in production")
             if not self.cors_allowed_origins or any(
-                not origin.startswith("https://") for origin in self.cors_allowed_origins
+                not (origin.startswith("https://") or origin.startswith("http://")) for origin in self.cors_allowed_origins
             ):
-                raise RuntimeError("Production CORS_ALLOWED_ORIGINS must contain HTTPS origins only")
+                raise RuntimeError("Production CORS_ALLOWED_ORIGINS must contain explicit http:// or https:// origins")
             if not self.allowed_hosts or "*" in self.allowed_hosts:
                 raise RuntimeError("Production ALLOWED_HOSTS must be explicit and must not contain a wildcard")
             if not self.LLM_BASE_URL.startswith("https://"):

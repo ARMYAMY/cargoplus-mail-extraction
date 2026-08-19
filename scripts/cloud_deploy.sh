@@ -131,14 +131,19 @@ ensure_host_tools() {
   for command_name in curl openssl getent awk find; do
     command -v "$command_name" >/dev/null 2>&1 || missing="true"
   done
-  [ "$missing" = "false" ] && return
+  if [ "$missing" = "false" ]; then
+    return 0
+  fi
   command -v apt-get >/dev/null 2>&1 || die "curl, openssl and standard GNU tools are required"
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl openssl libc-bin gawk findutils
 }
 
 configure_firewall() {
-  [ "$ENABLE_FIREWALL" = "true" ] || { log "Firewall setup skipped by request"; return; }
+  if [ "$ENABLE_FIREWALL" != "true" ]; then
+    log "Firewall setup skipped by request"
+    return 0
+  fi
   command -v ufw >/dev/null 2>&1 || {
     apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y ufw
@@ -148,11 +153,9 @@ configure_firewall() {
   ssh_port="${ssh_port:-22}"
   [[ "$ssh_port" =~ ^[0-9]+$ ]] || die "unable to determine a safe SSH port"
   ufw allow "$ssh_port/tcp" comment 'SSH' >/dev/null
-  ufw allow 80/tcp comment 'CargoPlus HTTP' >/dev/null
-  ufw allow 443/tcp comment 'CargoPlus HTTPS' >/dev/null
-  ufw allow 443/udp comment 'CargoPlus HTTP3' >/dev/null
+  ufw allow 30010/tcp comment 'CargoPlus Web 30010' >/dev/null
   ufw --force enable >/dev/null
-  log "UFW enabled: SSH $ssh_port/tcp, HTTP 80/tcp, HTTPS 443/tcp+udp"
+  log "UFW enabled: SSH $ssh_port/tcp, CargoPlus Web 30010/tcp"
 }
 
 detect_public_ipv4() {
@@ -160,7 +163,7 @@ detect_public_ipv4() {
   candidate="$(curl -4fsS --max-time 8 https://api.ipify.org 2>/dev/null || true)"
   if validate_ipv4 "$candidate"; then
     printf '%s' "$candidate"
-    return
+    return 0
   fi
   candidate="$(hostname -I 2>/dev/null | awk '{print $1}')"
   validate_ipv4 "$candidate" || return 1
@@ -187,7 +190,7 @@ select_public_host() {
     else
       validate_ipv4 "$PUBLIC_HOST_INPUT" || die "--ip requires a valid IPv4 address"
     fi
-    return
+    return 0
   fi
   TLS_MODE="ip"
   PUBLIC_HOST_INPUT="$(detect_public_ipv4)" || die "cannot detect public IPv4; rerun with --ip or --domain"
@@ -195,7 +198,9 @@ select_public_host() {
 }
 
 check_domain_dns() {
-  [ "$TLS_MODE" = "domain" ] || return
+  if [ "$TLS_MODE" != "domain" ]; then
+    return 0
+  fi
   local detected resolved
   detected="$(detect_public_ipv4 || true)"
   resolved="$(getent ahostsv4 "$PUBLIC_HOST_INPUT" 2>/dev/null | awk '{print $1}' | sort -u)"
@@ -250,9 +255,10 @@ prepare_configuration() {
 
   cat >"$ENV_FILE" <<EOF
 PUBLIC_HOST=$PUBLIC_HOST_INPUT
+APP_PORT=30010
 TLS_MODE=$TLS_MODE
 ACME_EMAIL=${ACME_EMAIL:-}
-CORS_ALLOWED_ORIGINS=https://$PUBLIC_HOST_INPUT
+CORS_ALLOWED_ORIGINS=http://$PUBLIC_HOST_INPUT:30010,https://$PUBLIC_HOST_INPUT:30010,http://localhost:30010
 ALLOWED_HOSTS=$PUBLIC_HOST_INPUT,api,localhost,127.0.0.1
 CLOUD_BACKUP_DIR=$BACKUP_DIR
 CARGOPLUS_IMAGE=cargoplus-app:cloud
@@ -282,10 +288,10 @@ EOF
   chmod 0600 "$ENV_FILE"
 
   cat >"$CREDENTIALS_FILE" <<EOF
-CargoPlus URL: https://$PUBLIC_HOST_INPUT/
+CargoPlus URL: http://$PUBLIC_HOST_INPUT:30010/
 Admin username: admin
 Admin password: $(tr -d '\r\n' <"$SECRETS_DIR/admin_secret")
-TLS mode: $TLS_MODE
+Port: 30010
 EOF
   chmod 0600 "$CREDENTIALS_FILE"
 }
@@ -294,12 +300,15 @@ validate_compose() {
   compose config --quiet
   docker run --rm \
     -v "$CLOUD_DIR/Caddyfile.active:/etc/caddy/Caddyfile:ro" \
-    caddy:2.11.2-alpine@sha256:834468128c7696cec0ceea6172f7d692daf645ae51983ca76e39da54a97c570d \
+    caddy:2-alpine \
     caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 }
 
 scan_application_image() {
-  [ "$RUN_SCAN" = "true" ] || { log "Image vulnerability scan skipped by request"; return; }
+  if [ "$RUN_SCAN" != "true" ]; then
+    log "Image vulnerability scan skipped by request"
+    return 0
+  fi
   log "Scanning application image for HIGH/CRITICAL vulnerabilities and secrets"
   docker run --rm \
     -v /var/run/docker.sock:/var/run/docker.sock \
@@ -311,37 +320,31 @@ scan_application_image() {
 export_ca() {
   local caddy_id
   caddy_id="$(compose ps -q caddy)"
-  [ -n "$caddy_id" ] || die "Caddy container is not running"
+  [ -n "$caddy_id" ] || return 0
   local temporary
-  temporary="$(mktemp "$STATE_DIR/.caddy-root.XXXXXX")"
-  docker cp "$caddy_id:/data/caddy/pki/authorities/local/root.crt" "$temporary" >/dev/null
-  chmod 0644 "$temporary"
-  mv -f "$temporary" "$CA_EXPORT"
-  log "Private CA certificate exported to $CA_EXPORT"
+  temporary="$(mktemp "$STATE_DIR/.caddy-root.XXXXXX" 2>/dev/null || true)"
+  if [ -n "$temporary" ] && docker cp "$caddy_id:/data/caddy/pki/authorities/local/root.crt" "$temporary" >/dev/null 2>&1; then
+    chmod 0644 "$temporary"
+    mv -f "$temporary" "$CA_EXPORT"
+    log "Private CA certificate exported to $CA_EXPORT"
+  fi
+  return 0
 }
 
 wait_for_service() {
-  local attempt
-  for attempt in $(seq 1 90); do
-    if [ "$TLS_MODE" = "domain" ]; then
-      if curl -fsS --max-time 5 "https://$PUBLIC_HOST_INPUT/health/live" >/dev/null 2>&1; then
-        return
-      fi
-    else
-      if [ ! -f "$CA_EXPORT" ]; then
-        export_ca >/dev/null 2>&1 || true
-      fi
-      if [ -f "$CA_EXPORT" ] && curl -fsS --max-time 5 --cacert "$CA_EXPORT" \
-        "https://$PUBLIC_HOST_INPUT/health/live" >/dev/null 2>&1; then
-        return
-      fi
+  local attempt port="${APP_PORT:-30010}"
+  log "Waiting for service to become healthy on port $port..."
+  for attempt in $(seq 1 60); do
+    if curl -fsS --max-time 5 "http://127.0.0.1:${port}/health/ready" >/dev/null 2>&1 || \
+       curl -fsS --max-time 5 "http://${PUBLIC_HOST_INPUT}:${port}/health/ready" >/dev/null 2>&1; then
+      log "Service is live and ready on port $port!"
+      return 0
     fi
-    : "$attempt"
-    sleep 4
+    sleep 3
   done
   compose ps
   compose logs --tail=100 api caddy
-  die "HTTPS health check did not become ready"
+  die "Health check did not become ready on port $port"
 }
 
 deploy_stack() {
@@ -354,20 +357,17 @@ deploy_stack() {
   prepare_configuration
   validate_compose
   log "Building CargoPlus application image"
-  compose build --pull api
+  compose build api
   scan_application_image
   log "Starting PostgreSQL, Redis, API, Celery workers, Beat, backups and Caddy"
   compose up -d --remove-orphans
   if [ "$TLS_MODE" = "ip" ]; then
-    export_ca
+    export_ca || true
   fi
   wait_for_service
   compose ps
-  log "Deployment complete: https://$PUBLIC_HOST_INPUT/"
+  log "Deployment complete: http://$PUBLIC_HOST_INPUT:${APP_PORT:-30010}/"
   log "Admin credentials: $CREDENTIALS_FILE (root-readable only)"
-  if [ "$TLS_MODE" = "ip" ]; then
-    log "Install $CA_EXPORT on each client device before opening the site"
-  fi
 }
 
 load_existing() {

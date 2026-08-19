@@ -4,7 +4,7 @@
 
 ## 1. 系统总体技术架构
 
-CargoPlus 采用现代微服务架构，基于 Python 异步生态（FastAPI + SQLAlchemy 2.0 Async + Celery/Redis）构建，实现**多模态单证解析、大模型智能抽取、规则化归一化、分布式削峰队列与原子商业化计费**的一体化闭环。
+CargoPlus 采用现代微服务架构，基于 Python 异步生态（FastAPI + SQLAlchemy 2.0 Async + Celery/Redis）构建，实现**多模态单证解析、大模型动态探测与抽取、规则化归一化、分布式削峰与双模降级队列、原子商业化计费**的一体化闭环。
 
 ```mermaid
 graph TB
@@ -18,20 +18,22 @@ graph TB
     subgraph 应用服务层 [应用服务层 FastAPI Cluster]
         API[FastAPI 异步微服务 Core]
         AuthModule[认证鉴权模块<br/>API Key / JWT Session / Admin Secret]
+        LLMConfigModule[大模型动态探测与配置<br/>GET /models 探活 / 运行时热更新]
         BillingModule[财务计费模块<br/>原子预留 / 成功扣费 / 充值记账]
         ParserModule[多模态解析引擎<br/>.eml / PDF / Excel / Word / RapidOCR]
         ValidatorModule[V3 模式验证与清洗<br/>normalize_output.py]
     end
 
-    subgraph 队列与调度层 [削峰队列与任务调度]
+    subgraph 队列与调度层 [削峰队列与自适应调度]
         RedisQueue[(Redis Broker & Semaphore Cache)]
         CeleryWorker[Celery 抽取 Worker 池<br/>Bounded Concurrency: 1~100]
+        LocalFallback[单机/无队列自适应降级自愈引擎]
         WebhookWorker[独立 Webhook Dispatcher Worker<br/>HMAC-SHA256 & 指数退避重试]
         CeleryBeat[Celery Beat 定时巡检<br/>过期任务租约自愈 & 90天附件清理]
     end
 
     subgraph 外部智能服务 [外部 AI 服务]
-        LLM[商汤科技开放平台 / DeepSeek 大模型<br/>https://api.senseaudio.cn/v1]
+        LLM[大模型服务商 / OpenAI 兼容端点<br/>商汤 / DeepSeek / 硅基 / 阿里 / 智谱 / Ollama]
     end
 
     subgraph 数据存储层 [持久化数据层]
@@ -50,11 +52,14 @@ graph TB
     Nginx --> API
 
     API --> AuthModule
+    API --> LLMConfigModule
     API --> BillingModule
     API --> ParserModule
     API --> RedisQueue
+    API --> LocalFallback
     API --> DB
 
+    LLMConfigModule --> LLM
     RedisQueue --> CeleryWorker
     RedisQueue --> WebhookWorker
     CeleryWorker --> ParserModule
@@ -62,7 +67,11 @@ graph TB
     CeleryWorker --> ValidatorModule
     CeleryWorker --> BillingModule
     CeleryWorker --> DB
-    CeleryWorker --> RedisQueue
+    LocalFallback --> ParserModule
+    LocalFallback --> LLM
+    LocalFallback --> ValidatorModule
+    LocalFallback --> BillingModule
+    LocalFallback --> DB
     WebhookWorker --> Client
 
     CeleryBeat --> DB
@@ -76,21 +85,32 @@ graph TB
 
 ## 2. 核心模块架构设计
 
-### 2.1 多模态单证解析与 OCR 引擎 (`app/core/parser/`)
+### 2.1 大模型动态探测与配置服务 (`app/api/admin/llm_config.py` & `app/core/skill_runner.py`)
+- **上游 API 探活与模型发现 (`POST /admin/llm-config/models`)**：
+  - 向上游服务商端点 `{base_url}/models` 发送探测请求；
+  - 自动解析兼容 OpenAI 标准数据结构 (`data: [{id: "..."}]`) 与本地 Ollama 格式 (`models: [{name: "..."}]`)；
+  - 前端控制台实时获取并填充下拉模型列表，支持一键切换与手动输入自定义模型。
+- **运行时热更新与测速 (`POST /admin/llm-config/test`)**：
+  - 发送轻量探测请求验证 API Key 并测量网络往返延迟（ms）；
+  - 配置持久化于系统表 `system_configs`，重启或多实例部署均可保持一致。
+- **全链路解耦与动态透传**：
+  - 工作台与同步抽取接口 `/api/v1/extract/sync` 响应中直接带回 `model_used`，全链路彻底去除写死服务商/模型标识。
+
+### 2.2 多模态单证解析与 OCR 引擎 (`app/core/parser/`)
 - **调度分发中心 (`__init__.py`)**：根据文件 MIME/扩展名自动路由至专用解析器；
 - **邮件解析 (`eml_parser.py`)**：利用标准 Python `email` 模块解析 RFC822 结构，递归提取内嵌正文与附件，HTML 正文利用自定义算法转为干净的 Markdown 纯文本；
 - **表格解析 (`excel_parser.py`)**：利用 `openpyxl` 提取多 Sheet 表格，空行过滤并渲染为标准 Markdown 表格，单 Sheet 前 100 行限额保护；
 - **文档解析 (`pdf_parser.py`, `word_parser.py`)**：利用 `pypdf` 与 `python-docx` 提取文档层文本与表格；
 - **本地 OCR 引擎 (`ocr_engine.py`)**：基于 `rapidocr_onnxruntime` 构建本地高性能轻量 OCR 引擎，对各类海运单证扫描图片进行高精度文字识别。
 
-### 2.2 规则归一化流水线 (`app/core/normalizer.py`)
+### 2.3 规则归一化流水线 (`app/core/normalizer.py`)
 - 严格遵循 `cargo-mail-extraction-skill-v3` 规范：
   1. **收发通主体分离**：`ShipperAddr` 自动剥离首行抬头，提取 `TEL:`、`FAX:`、`EMAIL:`；
   2. **件重体分离**：`Packages`、`GrossWeight`、`Volume` 数值与包装单位精确拆分；
   3. **品名中英文分离**：根据 CJK 字符区间智能拆分中英文品名；
   4. **箱型代码归一**：依据标准海运箱型代码对照表（`20GP`、`40HQ`、`45HQ`、`NOR`、`RF` 等）进行规范化转换。
 
-### 2.3 原子计量扣费与预留锁机制 (`app/services/billing_service.py`)
+### 2.4 原子计量扣费与预留锁机制 (`app/services/billing_service.py`)
 为了杜绝高并发下超额欠费排队与重复扣费，系统采用 **二阶段原子扣费机制**：
 ```mermaid
 sequenceDiagram
@@ -98,8 +118,8 @@ sequenceDiagram
     participant Client as 客户端
     participant API as API 服务
     participant DB as 数据库 (PostgreSQL/SQLite)
-    participant Worker as Celery Worker
-    participant LLM as 商汤大模型
+    participant Worker as Celery Worker / 本地降级引擎
+    participant LLM as 上游大模型 API
 
     Client->>API: POST /extract/async (提交任务)
     API->>DB: UPDATE Tenant SET reserved = reserved + unit_price WHERE balance - reserved >= unit_price
@@ -109,12 +129,12 @@ sequenceDiagram
     else 预留成功
         DB-->>API: 1 row updated
         API->>DB: INSERT INTO tasks (status='PENDING', is_reserved=TRUE)
-        API->>Worker: Enqueue Task ID
+        API->>Worker: Enqueue Task ID (或本地异步降级)
         API-->>Client: HTTP 200 (返回 Task ID)
     end
 
     Worker->>DB: 获取任务并标记 status='PROCESSING' (租约锁定)
-    Worker->>LLM: 调用大模型抽取
+    Worker->>LLM: 调用大模型抽取 (含超时重试)
     Worker->>Worker: 规则归一化清洗与 V3 校验
 
     alt 抽取成功
@@ -126,7 +146,8 @@ sequenceDiagram
     end
 ```
 
-### 2.4 分布式削峰队列与自愈恢复 (`app/services/queue_service.py` & `app/celery_tasks.py`)
+### 2.5 分布式削峰队列与自愈恢复 (`app/services/queue_service.py` & `app/celery_tasks.py`)
+- **双模自适应降级**：当 Redis/Celery 不可达时，同步/异步任务自动无感切换为进程内安全处理，确保服务不因依赖故障中断；
 - **租户并发隔离**：基于 Redis Lua 脚本原子信号量，限制单租户活跃执行任务数不超过配置上限（1~30），超出返回 `HTTP 429`（附带 `Retry-After: 3`）；
 - **任务租约与超时自愈**：每个执行中任务获得 60s 数据库 Lease 租约，Celery Beat / 本地恢复巡检定时扫描超期租约任务并重新入队，确保断电重启零丢单；
 - **独立 Webhook 消费**：Webhook 回调任务投递至独立队列，慢速客户服务器不影响主抽取流水线吞吐。
@@ -203,9 +224,10 @@ erDiagram
 
 | 指标维度 | 设计规范与保障措施 |
 | :--- | :--- |
+| **大模型动态扩展** | 支持运行时热更新与 API 动态探测，兼容主流商业与开源大模型，无硬编码限制 |
 | **资金一致性保障** | 数据库 CHECK 约束、原子 UPDATE 条件更新、幂等防重扣保证 100% 账实相符 |
 | **SSRF 防御** | Webhook URL 解析验证，强制阻断 RFC1918 私网、127.0.0.1、169.254.169.254 等私有网段 |
 | **身份与权限隔离** | JWT Session 签名、PBKDF2 强哈希密码存储、租户级数据隔离防越权 |
 | **单证防 DoS 截断** | 邮件附件数上限 10、PDF 单文件上限 20 页、Excel 单表上限 100 行、文本最大 10,000 字符 |
 | **附件生命周期清理** | 后台每天自动扫描 `uploads/`，安全删除 90 天前原始附件，结构化 JSON 永久归档 |
-| **代码测试覆盖率** | 183 项自动化单元与集成测试用例，**全后端代码覆盖率达 95.0%** |
+| **代码测试覆盖率** | 198 项自动化单元与集成测试用例，**全后端代码覆盖率达 94.0%~95.0%** |

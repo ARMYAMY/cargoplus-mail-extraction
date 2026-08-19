@@ -1,27 +1,15 @@
 {
 	admin off
-	default_sni {$PUBLIC_HOST}
-	skip_install_trust
+	auto_https off
 }
 
-http://{$PUBLIC_HOST} {
-	redir https://{$PUBLIC_HOST}{uri} permanent
-}
-
-https://{$PUBLIC_HOST} {
-	tls internal
+:30010 {
 	encode zstd gzip
 
-	@private_paths path /metrics /docs* /redoc* /openapi.json
-	respond @private_paths 404
-
 	header {
-		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "no-referrer"
-		Permissions-Policy "camera=(), microphone=(), geolocation=()"
-		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
 		-Server
 	}
 

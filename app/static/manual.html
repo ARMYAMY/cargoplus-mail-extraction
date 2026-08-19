@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>用户手册 · CargoPlus 货代邮件抽取平台</title>
+  
+  <!-- Google Fonts: Dancing Script (Brand), Instrument Serif (Headings), Inter (Body) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  
+  <link rel="stylesheet" href="/static/css/app.css?v=20260819v32">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #0a0608;
+      color: #f8fafc;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+
+    .font-instrument {
+      font-family: 'Instrument Serif', Georgia, serif;
+    }
+    .font-dancing {
+      font-family: 'Dancing Script', cursive;
+    }
+
+    .text-glow {
+      text-shadow: 0 0 30px rgba(255, 255, 255, 0.4), 0 0 60px rgba(255, 255, 255, 0.2);
+    }
+    .button-glow {
+      box-shadow: 0 0 20px rgba(255, 255, 255, 0.25), 0 0 40px rgba(255, 255, 255, 0.1);
+    }
+
+    .docs-topbar {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      background: rgba(14, 10, 12, 0.85);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 16px 40px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .docs-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+    }
+
+    .brand-logo-text {
+      font-family: 'Dancing Script', cursive;
+      font-size: 2rem;
+      font-weight: 700;
+      color: #ffffff;
+      line-height: 1;
+    }
+
+    .docs-tag {
+      font-size: 0.72rem;
+      color: rgba(255, 255, 255, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      padding: 2px 8px;
+      border-radius: 9999px;
+    }
+
+    .docs-nav-links {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .docs-nav-link {
+      color: rgba(255, 255, 255, 0.7);
+      text-decoration: none;
+      font-size: 0.85rem;
+      transition: all 0.2s ease;
+    }
+
+    .docs-nav-link:hover {
+      color: #ffffff;
+    }
+
+    /* Main Container */
+    .docs-layout {
+      display: flex;
+      width: min(100%, 1400px);
+      margin: 0 auto;
+      flex: 1;
+      padding: 40px 32px;
+      gap: 48px;
+    }
+
+    .docs-sidebar {
+      width: 260px;
+      flex-shrink: 0;
+      position: sticky;
+      top: 100px;
+      height: calc(100vh - 140px);
+      overflow-y: auto;
+      padding-right: 16px;
+    }
+
+    .docs-menu-group {
+      margin-bottom: 24px;
+    }
+
+    .docs-menu-title {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: rgba(255, 255, 255, 0.4);
+      margin-bottom: 10px;
+    }
+
+    .docs-menu-item {
+      display: block;
+      color: rgba(255, 255, 255, 0.7);
+      text-decoration: none;
+      font-size: 0.86rem;
+      padding: 6px 12px;
+      border-radius: 9999px;
+      margin-bottom: 4px;
+      transition: all 0.2s ease;
+    }
+
+    .docs-menu-item:hover, .docs-menu-item.active {
+      color: #0a0608;
+      background: #ffffff;
+      font-weight: 600;
+    }
+
+    .docs-content {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .docs-hero {
+      margin-bottom: 48px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      padding-bottom: 32px;
+    }
+
+    .docs-hero h1 {
+      font-family: 'Instrument Serif', Georgia, serif;
+      font-size: 2.8rem;
+      font-weight: 400;
+      letter-spacing: -0.01em;
+      color: #ffffff;
+      margin-bottom: 12px;
+    }
+
+    .docs-hero p {
+      font-size: 1rem;
+      color: rgba(255, 255, 255, 0.7);
+      line-height: 1.6;
+      max-width: 800px;
+    }
+
+    .docs-section {
+      margin-bottom: 48px;
+    }
+
+    .docs-section h2 {
+      font-family: 'Instrument Serif', Georgia, serif;
+      font-size: 1.8rem;
+      font-weight: 400;
+      color: #ffffff;
+      margin-bottom: 16px;
+      padding-top: 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .docs-section h3 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #ffffff;
+      margin: 24px 0 12px;
+    }
+
+    .docs-section p, .docs-section li {
+      font-size: 0.9rem;
+      color: rgba(255, 255, 255, 0.75);
+      line-height: 1.7;
+    }
+
+    .docs-section ul, .docs-section ol {
+      padding-left: 20px;
+      margin-bottom: 16px;
+    }
+
+    .code-block {
+      background: rgba(8, 5, 7, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 18px 20px;
+      margin: 16px 0;
+      overflow-x: auto;
+      position: relative;
+    }
+
+    .code-block pre {
+      font-family: var(--font-mono);
+      font-size: 0.84rem;
+      color: #93c5fd;
+      line-height: 1.55;
+    }
+
+    .badge-method {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 700;
+      margin-right: 8px;
+    }
+
+    .badge-post { background: rgba(52, 211, 153, 0.2); color: #34d399; border: 1px solid rgba(52, 211, 153, 0.3); }
+    .badge-get { background: rgba(56, 189, 248, 0.2); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); }
+
+    .param-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0 24px;
+      font-size: 0.85rem;
+    }
+
+    .param-table th {
+      text-align: left;
+      padding: 10px 14px;
+      background: rgba(255, 255, 255, 0.03);
+      color: rgba(255, 255, 255, 0.5);
+      font-weight: 500;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .param-table td {
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .param-table code {
+      font-family: var(--font-mono);
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.06);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    @media (max-width: 900px) {
+      .docs-sidebar { display: none; }
+      .docs-layout { padding: 24px 16px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="docs-topbar">
+    <a href="/" class="docs-brand">
+      <span class="brand-logo-text text-glow">CargoPlus</span>
+      <span class="docs-tag">用户手册</span>
+    </a>
+    <div class="docs-nav-links">
+      <a href="/" class="docs-nav-link">总控大盘</a>
+      <a href="/portal" class="docs-nav-link">租户对账</a>
+      <a href="https://fde.shenzhoukuntai.com" target="_blank" class="docs-nav-link">关于我们</a>
+      <a href="/register" class="btn btn-sm btn-primary button-glow">立即开户 (赠 ¥50)</a>
+    </div>
+  </header>
+
+  <!-- Content Layout -->
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="docs-menu-group">
+        <div class="docs-menu-title">入门指引</div>
+        <a href="#quickstart" class="docs-menu-item active">1. 快速接入指南</a>
+        <a href="#auth" class="docs-menu-item">2. 认证鉴权规范</a>
+      </div>
+      <div class="docs-menu-group">
+        <div class="docs-menu-title">核心抽取 API</div>
+        <a href="#extract-async" class="docs-menu-item">3. 异步抽取 (推荐)</a>
+        <a href="#extract-sync" class="docs-menu-item">4. 同步即时抽取</a>
+        <a href="#tasks-query" class="docs-menu-item">5. 任务状态与结果查询</a>
+      </div>
+      <div class="docs-menu-group">
+        <div class="docs-menu-title">高可用与集成</div>
+        <a href="#webhook" class="docs-menu-item">6. Webhook 验签规范</a>
+        <a href="#fields-v3" class="docs-menu-item">7. V3 57 核心字段规范</a>
+        <a href="#status-codes" class="docs-menu-item">8. 响应状态码与异常</a>
+      </div>
+    </aside>
+
+    <main class="docs-content">
+      <section class="docs-hero">
+        <h1>CargoPlus 用户手册与集成指引</h1>
+        <p>CargoPlus 采用现代工业级 Skill V3 架构，为国际货运代理、无船承运人（NVOCC）及物流 ERP 系统提供高并发、高精度的邮件与附件单证结构化抽取服务。</p>
+      </section>
+
+      <!-- 1. 快速接入指南 -->
+      <section class="docs-section" id="quickstart">
+        <h2>1. 快速接入指南</h2>
+        <p>仅需三步即可完成生产环境对接：</p>
+        <ol>
+          <li><strong>注册开户</strong>：访问 <a href="/register" style="color:#ffffff; text-decoration:underline;">企业开户页面</a> 提交申请，获取唯一的 <code>API Key</code> 与 <code>Webhook Secret</code>；</li>
+          <li><strong>提交抽取</strong>：向 <code>/api/v1/extract/async</code> 提交订舱确认邮件正文或多模态附件（.eml, PDF, Excel）；</li>
+          <li><strong>接收通知</strong>：配置回调地址 <code>callback_url</code>，抽取成功后系统将自动以 HMAC-SHA256 签名方式将 57 个标准结构化字段推送到您的业务系统。</li>
+        </ol>
+      </section>
+
+      <!-- 2. 认证鉴权规范 -->
+      <section class="docs-section" id="auth">
+        <h2>2. 认证鉴权规范</h2>
+        <p>所有客户端调用需在 HTTP 请求头中携带企业 API Key：</p>
+        <div class="code-block">
+          <pre><code>Authorization: Bearer cg_live_xxxxxxxx_yyyyyyyyyyyyyyyyyyyyyyyy</code></pre>
+        </div>
+        <p>或通过自定义 Header 传入：</p>
+        <div class="code-block">
+          <pre><code>X-API-Key: cg_live_xxxxxxxx_yyyyyyyyyyyyyyyyyyyyyyyy</code></pre>
+        </div>
+      </section>
+
+      <!-- 3. 异步抽取 -->
+      <section class="docs-section" id="extract-async">
+        <h2>3. 异步邮件抽取接口 (POST /api/v1/extract/async)</h2>
+        <p>适用于生产环境 ERP 对接。系统执行原子额度预留并进入削峰队列处理。</p>
+        
+        <h3>请求体 JSON 参数：</h3>
+        <table class="param-table">
+          <thead>
+            <tr><th>字段名</th><th>类型</th><th>必填</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>mail_subject</code></td><td>string</td><td>否</td><td>邮件标题</td></tr>
+            <tr><td><code>mail_body</code></td><td>string</td><td>是</td><td>邮件正文内容（中英混排）</td></tr>
+            <tr><td><code>callback_url</code></td><td>string</td><td>否</td><td>抽取完成后的 Webhook 接收地址</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Python 示例代码：</h3>
+        <div class="code-block">
+          <pre><code>import requests
+
+url = "http://localhost:8000/api/v1/extract/async"
+headers = {
+    "Authorization": "Bearer cg_live_your_api_key",
+    "Content-Type": "application/json",
+    "Idempotency-Key": "req_unique_id_12345"  # 防重复提交幂等键
+}
+payload = {
+    "mail_subject": "Booking Confirmation - 2x40HQ SHANGHAI TO ROTTERDAM",
+    "mail_body": "DEAR CUSTOMER, BOOKING NO: COSU638291048, VESSEL: CSCL GLOBE / 042W, POL: SHANGHAI, POD: ROTTERDAM",
+    "callback_url": "https://your-erp.com/webhooks/cargo"
+}
+
+response = requests.post(url, json=payload, headers=headers)
+print(response.json())</code></pre>
+        </div>
+      </section>
+
+      <!-- 4. 同步即时抽取 -->
+      <section class="docs-section" id="extract-sync">
+        <h2>4. 同步即时抽取接口 (POST /api/v1/extract/sync)</h2>
+        <p>客户端阻塞等待抽取完成并直接返回 57 字段规范 JSON（包含实际生效的模型 <code>model_used</code> 与耗时 <code>duration_ms</code>）。</p>
+      </section>
+
+      <!-- 5. 任务查询 -->
+      <section class="docs-section" id="tasks-query">
+        <h2>5. 任务状态与结果查询 (GET /api/v1/tasks/{task_id})</h2>
+        <p>若未使用 Webhook，客户端可轮询查询任务的实时状态与抽取详情。</p>
+      </section>
+
+      <!-- 6. Webhook 验签规范 -->
+      <section class="docs-section" id="webhook">
+        <h2>6. Webhook 签名校验规范 (HMAC-SHA256)</h2>
+        <p>为防止重放攻击与伪造通知，系统在推送结果时会附带签名 Header：</p>
+        <div class="code-block">
+          <pre><code>X-Timestamp: 1724064600000
+X-Signature-SHA256: d5a4e6b2c86472...</code></pre>
+        </div>
+
+        <h3>Python 验签函数：</h3>
+        <div class="code-block">
+          <pre><code>import hmac
+import hashlib
+import time
+
+def verify_webhook(raw_body_bytes: bytes, timestamp_str: str, signature_header: str, tenant_secret: str) -> bool:
+    # 1. 防重放攻击 (偏差不超过 5 分钟)
+    if abs(int(time.time() * 1000) - int(timestamp_str)) > 300_000:
+        return False
+    # 2. 计算签名: HMAC_SHA256(secret, timestamp + "." + body)
+    message = f"{timestamp_str}.".encode("utf-8") + raw_body_bytes
+    expected_sig = hmac.new(tenant_secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+    # 3. 恒定时间比对
+    return hmac.compare_digest(expected_sig, signature_header)</code></pre>
+        </div>
+      </section>
+
+      <!-- 7. V3 57 核心字段规范 -->
+      <section class="docs-section" id="fields-v3">
+        <h2>7. V3 57 核心字段规范概览</h2>
+        <p>系统自动识别并归一化海运订舱核心要素：</p>
+        <ul>
+          <li><strong>订舱与船期</strong>：<code>BookingNo</code>, <code>Carrier</code>, <code>Vessel</code>, <code>Voyage</code>, <code>SO</code>, <code>ETD</code>, <code>ETA</code>, <code>ClosingDate</code>, <code>CutOffDate</code> 等；</li>
+          <li><strong>港口代码</strong>：<code>POL</code> (五字码如 CNSHA), <code>POLName</code>, <code>POD</code> (如 NLRTM), <code>PODName</code>, <code>TransitPort</code>；</li>
+          <li><strong>集装箱与箱型</strong>：<code>ContainerInfo</code> (数组包含 <code>ContainerNo</code>, <code>ContSize</code>: 20/40/45, <code>ContType</code>: GP/HQ/NOR/RF, <code>SealNo</code>)；</li>
+          <li><strong>件重体分离</strong>：<code>Packages</code>, <code>PackagesUnit</code>, <code>GrossWeight</code>, <code>GrossWeightUnit</code>, <code>Volume</code>, <code>VolumeUnit</code>；</li>
+          <li><strong>收发通实体</strong>：<code>Shipper</code>, <code>ShipperAddr</code>, <code>Consignee</code>, <code>ConsigneeAddr</code>, <code>NotifyParty</code>, <code>NotifyPartyAddr</code>；</li>
+          <li><strong>品名拆分</strong>：<code>GoodsName</code> (英文品名), <code>GoodsNameCN</code> (中文品名)。</li>
+        </ul>
+      </section>
+
+      <!-- 8. 状态码说明 -->
+      <section class="docs-section" id="status-codes">
+        <h2>8. 常见响应状态码与错误处理</h2>
+        <table class="param-table">
+          <thead>
+            <tr><th>HTTP 状态码</th><th>错误场景</th><th>解决指引</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>200 OK</code></td><td>请求成功</td><td>正常获取任务 ID 或抽取结果</td></tr>
+            <tr><td><code>401 Unauthorized</code></td><td>API Key 无效或未提供</td><td>检查请求头中的 <code>Authorization: Bearer &lt;key&gt;</code></td></tr>
+            <tr><td><code>402 Payment Required</code></td><td>账户可用余额不足</td><td>请联系管理员为企业充值或充值后重试</td></tr>
+            <tr><td><code>403 Forbidden</code></td><td>租户处于待审核或已禁用</td><td>待管理员在控制台审核激活后即可调用</td></tr>
+            <tr><td><code>429 Too Many Requests</code></td><td>超出并发限制</td><td>系统已返回 <code>Retry-After</code>，建议 1~3 秒后自动重试</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+
+</body>
+</html>

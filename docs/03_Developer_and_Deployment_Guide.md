@@ -8,8 +8,8 @@
 - **Python**: 3.11+
 - **包管理工具**: `uv` (推荐) 或 `pip`
 - **外部服务**:
-  - 商汤科技 / OpenAI 兼容 LLM API (`https://api.senseaudio.cn/v1`)
-  - Redis 6.0+ (用于 Celery 削峰队列与分布式信号量，本地测试可选内存队列)
+  - 商汤科技 / OpenAI 兼容 LLM API (`https://api.senseaudio.cn/v1` 或 DeepSeek / 硅基 / 阿里百炼 / 智谱 / Ollama 等)
+  - Redis 6.0+ (用于 Celery 削峰队列与分布式信号量；本地调试支持自适应降级自愈)
   - PostgreSQL 14+ (生产推荐) 或 SQLite 3.35+ (开发自测)
 
 ### 1.2 安装依赖
@@ -24,7 +24,7 @@ uv venv .venv
 .\.venv\Scripts\Activate.ps1
 
 # 安装核心依赖
-uv pip install -r requirements.txt
+uv pip install -r requirements-dev.txt
 ```
 
 ### 1.3 环境变量配置
@@ -38,9 +38,9 @@ PORT=8000
 # 数据库连接 (开发模式默认使用带 WAL 的 SQLite)
 DATABASE_URL=sqlite+aiosqlite:///./data/cargo_service.db
 
-# 商汤科技 / DeepSeek 大模型配置
+# 大模型配置 (支持主流 OpenAI 规范服务端点)
 LLM_BASE_URL=https://api.senseaudio.cn/v1
-LLM_API_KEY=your-sensetime-api-key
+LLM_API_KEY=your-llm-api-key
 LLM_MODEL=deepseek-v4-flash-0731
 LLM_TEMPERATURE=0.0
 LLM_REQUEST_TIMEOUT_SECONDS=60
@@ -75,13 +75,14 @@ WORKER_CONCURRENCY=10
 
 ## 2. 自动化测试与覆盖率验证
 
-系统内置完整的自动化测试套件（覆盖率 $\ge 95\%$），包含 183 项测试用例。
+系统内置完整的自动化测试套件（覆盖率保持在 **94%~95%**），包含 **198 项测试用例 (100% 绿灯通过)**。
 
 ```powershell
 # 运行完整测试套件并生成代码覆盖率报告
 .\.venv\Scripts\python.exe -m pytest --cov=app --cov-report=term-missing tests/
 
 # 仅运行特定测试模块
+.\.venv\Scripts\python.exe -m pytest tests/test_admin_llm_config.py -v
 .\.venv\Scripts\python.exe -m pytest tests/test_api_flow.py -v
 .\.venv\Scripts\python.exe -m pytest tests/test_concurrency_limits.py -v
 ```

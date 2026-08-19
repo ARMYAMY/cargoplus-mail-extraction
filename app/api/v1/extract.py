@@ -480,6 +480,7 @@ async def extract_sync(
             "status": "SUCCESS",
             "duration_ms": updated_task.duration_ms,
             "charged_amount": float(updated_task.charged_amount),
+            "model_used": getattr(updated_task, "model_used", None) or settings.LLM_MODEL,
             "data": result_data,
         }
     else:

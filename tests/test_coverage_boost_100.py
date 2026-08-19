@@ -66,7 +66,7 @@ async def test_auth_all_remaining_branches():
 
         # 1. register_tenant with already registered email -> 400
         with pytest.raises(HTTPException) as exc_reg_dup:
-            await register_tenant(TenantRegisterRequest(company_name="Dup", contact_email=email, password="Password123"), db=db)
+            await register_tenant(TenantRegisterRequest(company_name="Dup", contact_email=email, password="ComplexP@ss9988"), db=db)
         assert exc_reg_dup.value.status_code == 400
 
         # 2. Login by key with inactive tenant -> 403

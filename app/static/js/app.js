@@ -1338,7 +1338,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
       tenants.forEach((tenant) => {
         const availableBalance = getAvailableTenantBalance(tenant);
-        const optionLabel = `${tenant.name}（可用 ¥${availableBalance.toFixed(2)}，¥${parseFloat(tenant.unit_price).toFixed(2)} / 次）`;
+        const statusNote = tenant.is_active === false ? ' [待审核]' : '';
+        const optionLabel = `${tenant.name}（可用 ¥${availableBalance.toFixed(2)}，¥${parseFloat(tenant.unit_price).toFixed(2)} / 次）${statusNote}`;
         selects.forEach((select) => {
           const option = document.createElement('option');
           option.value = tenant.id;
@@ -1351,12 +1352,31 @@ document.addEventListener('DOMContentLoaded', () => {
       selects.forEach((select) => {
         const previousValue = previousValues.get(select);
         const previousOption = Array.from(select.options).find((option) => option.value === previousValue && !option.disabled);
-        if (previousOption) select.value = previousValue;
+        if (previousOption) {
+          select.value = previousValue;
+        } else {
+          const firstValid = Array.from(select.options).find((option) => !option.disabled);
+          if (firstValid) {
+            select.value = firstValid.value;
+          }
+        }
       });
       updateBenchmarkTenantSummary();
     } catch (err) {
       console.error('Failed to populate keys:', err);
     }
+  }
+
+  function getSelectedModel() {
+    const modelInput = document.getElementById('llm-model');
+    if (modelInput && modelInput.value && modelInput.value.trim()) {
+      return modelInput.value.trim();
+    }
+    const badge = document.querySelector('.engine-badge');
+    if (badge && badge.textContent) {
+      return badge.textContent.trim();
+    }
+    return 'SenseTime · deepseek-v4-flash';
   }
 
   // Mode Switch
@@ -1412,24 +1432,36 @@ MEAS: 68.000 CBM`;
     const subject = document.getElementById('wb-mail-subject').value.trim();
     const body = document.getElementById('wb-mail-body').value.trim();
     const attText = document.getElementById('wb-attachment-text').value.trim();
-    const selectedTenantId = document.getElementById('wb-select-key').value;
-    const buttonLabel = runTextButton.querySelector('span');
+    let selectedTenantId = document.getElementById('wb-select-key')?.value;
+    const buttonLabel = runTextButton.querySelector('span') || runTextButton;
+    const statusElem = document.getElementById('wb-result-status-text');
+    const jsonElem = document.getElementById('wb-json-output');
 
     if (!body && !attText) return showToast('warning', '请输入邮件正文或附件文本');
-    if (!selectedTenantId) return showToast('warning', '请选择承担本次抽取与扣费的租户');
 
-    const statusElem = document.getElementById('wb-result-status-text');
+    if (!selectedTenantId && currentTenants && currentTenants.length > 0) {
+      const activeTenant = currentTenants.find((t) => t.is_active !== false) || currentTenants[0];
+      if (activeTenant) {
+        selectedTenantId = activeTenant.id;
+        const selectElem = document.getElementById('wb-select-key');
+        if (selectElem) selectElem.value = activeTenant.id;
+      }
+    }
 
-    const jsonElem = document.getElementById('wb-json-output');
+    if (!selectedTenantId) {
+      return showToast('warning', '请选择承担本次抽取与扣费的租户（若无可用租户请先在租户管理中启用）');
+    }
+
+    const activeModel = getSelectedModel();
     runTextButton.disabled = true;
     if (buttonLabel) buttonLabel.textContent = '正在抽取...';
-    statusElem.textContent = '⏳ 商汤大模型抽取与 V3 规则清洗中...';
-    jsonElem.textContent = '// 正在调用商汤 API deepseek-v4-flash-0731 抽取中，请稍候...';
+    if (statusElem) statusElem.textContent = '⏳ 大模型抽取与 V3 规则清洗中...';
+    if (jsonElem) jsonElem.textContent = `// 正在调用大模型 (${activeModel}) 进行结构化抽取中，请稍候...`;
 
     const headers = {
       'Content-Type': 'application/json',
+      'X-Tenant-ID': selectedTenantId,
     };
-    headers['X-Tenant-ID'] = selectedTenantId;
 
     try {
       const res = await adminFetch('/api/v1/extract/sync', {
@@ -1449,11 +1481,22 @@ MEAS: 68.000 CBM`;
 
       const data = await res.json();
       const chargedAmount = parseFloat(data.charged_amount || 0);
-      statusElem.innerHTML = `✅ 抽取成功 · 耗时: <strong>${data.duration_ms} ms</strong> · 扣费: <strong class="text-danger">¥${chargedAmount.toFixed(2)}</strong>`;
-      jsonElem.textContent = JSON.stringify(data.data, null, 2);
+      const usedModel = data.model_used || activeModel;
+      if (statusElem) {
+        statusElem.innerHTML = `✅ 抽取成功 · 模型: <strong>${escapeHtml(usedModel)}</strong> · 耗时: <strong>${data.duration_ms} ms</strong> · 扣费: <strong class="text-danger">¥${chargedAmount.toFixed(2)}</strong>`;
+      }
+      if (jsonElem) {
+        jsonElem.textContent = JSON.stringify(data.data, null, 2);
+      }
+      showToast('success', `抽取成功 (耗时 ${data.duration_ms} ms)`);
     } catch (err) {
-      statusElem.innerHTML = `<span class="text-danger">❌ 抽取失败: ${escapeHtml(err.message)}</span>`;
-      jsonElem.textContent = `// 错误详情:\n${err.message}`;
+      if (statusElem) {
+        statusElem.innerHTML = `<span class="text-danger">❌ 抽取失败: ${escapeHtml(err.message)}</span>`;
+      }
+      if (jsonElem) {
+        jsonElem.textContent = `// 错误详情:\n${err.message}`;
+      }
+      showToast('error', `抽取失败: ${err.message}`);
     } finally {
       runTextButton.disabled = false;
       if (buttonLabel) buttonLabel.textContent = '执行 V3 结构化抽取';

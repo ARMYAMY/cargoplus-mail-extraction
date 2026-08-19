@@ -54,7 +54,7 @@ def test_production_security_validation_accepts_hardened_configuration():
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("CORS_ALLOWED_ORIGINS", "http://cargo.example.com", "HTTPS origins"),
+        ("CORS_ALLOWED_ORIGINS", "ftp://cargo.example.com", "http:// or https://"),
         ("ALLOWED_HOSTS", "*", "must be explicit"),
         ("LLM_BASE_URL", "http://llm.internal/v1", "must use HTTPS"),
         ("TASK_QUEUE_MODE", "local", "must be 'celery'"),

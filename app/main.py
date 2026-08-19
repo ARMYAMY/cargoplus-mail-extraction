@@ -282,6 +282,13 @@ async def serve_register():
     return FileResponse(str(register_file))
 
 
+@app.get("/manual", summary="用户接入与集成手册", include_in_schema=False)
+@app.get("/guide", summary="用户接入与集成手册", include_in_schema=False)
+async def serve_manual():
+    manual_file = STATIC_DIR / "manual.html"
+    return FileResponse(str(manual_file))
+
+
 
 
 @app.get("/health", summary="健康检查接口")

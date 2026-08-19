@@ -2,7 +2,7 @@
 
 云服务器单机一键部署见 [`docs/CLOUD_ONE_CLICK_DEPLOYMENT.md`](docs/CLOUD_ONE_CLICK_DEPLOYMENT.md)，上线安全评审见 [`docs/SECURITY_REVIEW.md`](docs/SECURITY_REVIEW.md)。
 
-基于 `cargo-mail-extraction-skill-v3` 规范打造的工业级海运货代邮件与单证结构化抽取平台。系统采用 **AI 语义抽取管道 + 高性能异步微服务架构**，支持多模态单证解析、多租户按次计量扣费（默认 0.50 元/次）、异步高并发削峰（支撑日万级吞吐）、HMAC-SHA256 防篡改 Webhook 回调推送以及现代化 Web 管理控制台。
+基于 `cargo-mail-extraction-skill-v3` 规范打造的工业级海运货代邮件与单证结构化抽取平台。系统采用 **AI 语义抽取管道 + 高性能异步微服务架构**，支持多模态单证解析、大模型服务热切换与 API 动态拉取、多租户按次计量扣费（默认 0.50 元/次）、异步高并发削峰（支撑日万级吞吐）、HMAC-SHA256 防篡改 Webhook 回调推送以及现代化 Web 管理控制台。
 
 ---
 
@@ -11,32 +11,36 @@
 1. **Skill V3 抽取规范全量继承**：
    - 提取 57 个顶层货代核心业务字段 + 13 个集装箱明细字段；
    - 执行二阶段规则清洗（`normalize_output.py`）：收发通主体与地址拆分、电话/邮箱/传真正则提取、件重体数值单位拆分、箱型代码标准归一、中英文品名拆分。
-2. **多模态与多格式文档自动解析与 RapidOCR**：
+2. **大模型服务热切换与 API 动态模型拉取**：
+   - **动态探活与模型发现 (`POST /admin/llm-config/models`)**：直接向上游大模型服务商标准 `GET {base_url}/models` 端点探测，自动拉取并解析可用模型列表（兼容 OpenAI、商汤 SenseAudio、DeepSeek 官方、硅基流动、阿里云百炼、智谱 GLM、本地 Ollama/vLLM 等）；
+   - **运行时热更新与连通性自检 (`POST /admin/llm-config/test`)**：在管理后台随时修改 Base URL、API Key 与 Model，无需重启服务即可即时生效；
+   - **全链路动态联动**：在线调试工作台与日志全量解耦，自动跟随当前生效的大模型动态渲染提示与状态。
+3. **多模态与多格式文档自动解析与 RapidOCR**：
    - 既支持传入标准结构化文本 JSON，也支持直接上传原始邮件（`.eml`）与各类单证附件（`PDF` 提单、`Excel` 装箱单、`Word` 合同、图片扫描件 RapidOCR 识别）。
-3. **精准的多租户计量、准入审核与原子扣费系统**：
+4. **精准的多租户计量、准入审核与原子扣费系统**：
    - 租户注册默认进入【待审核】状态（`is_active=False`），管理员审核开通并立赠 ¥50.00 试用金；
    - 支持管理员按租户动态调整调用单价（¥0.01~¥100.00）与并发上限（1~30）；
    - 租户独立获取并管理专属 API Key 与 Webhook Secret，支持 API Key 凭证免密登录；
    - 任务提交时通过数据库条件更新原子预留本次额度（不足返回 `402 Payment Required`），防止并发超额排队；
    - 仅在**任务成功提取并通过校验**后执行原子扣费（默认 0.50 元/次），失败或超时自动释放预留额度，严格**零扣费**；
    - 全页面财务对账单与流水支持标准分页与 1-Click CSV 电子账单导出。
-4. **持久化异步削峰与多租户公平调度 (5 分钟 SLA)**：
+5. **持久化异步削峰与双模自适应降级调度 (5 分钟 SLA)**：
    - PostgreSQL/SQLite (WAL 模式) 保存任务、租户、余额和不可变计费流水，Redis + Celery 提供可恢复的后台任务队列；
+   - **自适应降级自愈**：在未挂载外部 Redis/Celery 队列环境或本地开发调试时，系统自动无缝降级为**进程内安全同步/异步处理**，彻底避免服务中断；
    - 抽取与 Webhook 使用独立队列，慢回调不会占用抽取 worker；
-   - Redis 原子信号量实施租户级最大并发限制（1～30），Celery worker 实施全局并发限制（1～100）；
-   - 任务使用数据库租约、late ACK、过期任务恢复和提交幂等键，降低 worker 异常退出后的丢单与重复扣费风险。
-5. **安全可靠的 Webhook 推送**：
+   - Redis 原子信号量实施租户级最大并发限制（1～30），Celery worker 实施全局并发限制（1～100）。
+6. **安全可靠的 Webhook 推送**：
    - 任务处理完成后自动向客户系统的 `callback_url` 发送 POST 通知；
    - 携带 `X-Timestamp` 与 `X-Signature-SHA256` 签名（基于租户 Secret 进行 HMAC-SHA256 计算，防伪造、防篡改）；
    - 失败自动触发 3 次指数退避重试，具备完整公网 IP 校验白名单防御 SSRF。
-6. **现代化 Web 管理控制台与交互**：
+7. **现代化 Web 管理控制台与交互**：
    - 全面剔除原生浏览器 `alert`/`confirm` 弹窗，采用现代化 Toast 气泡与自定义 Modal 交互；
    - 实时数据大盘、近 14 天吞吐与营收折线图；
    - 租户开户审核、API Key 管理、在线余额充值、自定义单价修改；
    - 邮件任务全流程追踪、耗时统计、V3 JSON 高亮查看与一键复制；
    - 在线调试工作台（支持直接粘贴文本或拖拽文件上传实时测试）。
-7. **企业级质量保障与测试覆盖**：
-   - 拥有 **183 项自动化单元/集成测试用例 (100% 绿灯通过)**，后端核心代码覆盖率达到 **95%**。
+8. **企业级质量保障与测试覆盖**：
+   - 拥有 **198 项自动化单元/集成测试用例 (100% 绿灯通过)**，后端核心代码覆盖率达到 **94%~95%**。
 
 ---
 
@@ -99,12 +103,12 @@ uv pip install -r requirements-dev.txt
 
 ### 2. 配置环境变量
 
-复制 `.env.example` 为 `.env` 并配置您的商汤大模型 API 密钥：
+复制 `.env.example` 为 `.env` 并配置您的大模型 API 密钥：
 
 ```ini
-# 商汤大模型配置
+# 大模型配置 (支持商汤 / DeepSeek / 硅基 / 百炼 / 智谱 / OpenAI / Ollama 等)
 LLM_BASE_URL=https://api.senseaudio.cn/v1
-LLM_API_KEY=your-sensetime-api-key-here
+LLM_API_KEY=your-llm-api-key-here
 LLM_MODEL=deepseek-v4-flash-0731
 
 # 本地测试可使用 SQLite；Docker/生产使用 PostgreSQL
@@ -314,7 +318,7 @@ def verify_webhook_signature(secret: str, timestamp: str, raw_body_str: str, sig
 ## 🧪 运行自动化测试套件与覆盖率
 
 ```bash
-# 运行完整 183 项自动化测试并生成覆盖率报告 (>= 95%)
+# 运行完整 198 项自动化测试并生成覆盖率报告 (>= 94%~95%)
 .venv/Scripts/python.exe -m pytest --cov=app --cov-report=term-missing tests/
 ```
 

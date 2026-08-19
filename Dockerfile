@@ -1,4 +1,4 @@
-FROM python:3.11-slim@sha256:9c900dea9e8fb7e16277c179b555cc72d29a352dbc33cff48ad5a0412fd5bfc7
+FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -6,13 +6,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update \
+RUN (sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+     sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list 2>/dev/null || true) \
+    && apt-get update \
     && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 cargo
 
 COPY cargo_service/requirements.txt cargo_service/requirements.lock /app/
-RUN python -m pip install --no-deps -r /app/requirements.lock \
+RUN python -m pip install -i https://mirrors.aliyun.com/pypi/simple/ --no-deps -r /app/requirements.lock \
     && python -m pip uninstall -y pip setuptools wheel jaraco.context
 
 COPY --chown=cargo:cargo cargo_service/app /app/app

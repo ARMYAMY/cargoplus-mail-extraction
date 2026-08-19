@@ -4,11 +4,11 @@
 
 ## 1. 测试体系概览
 
-CargoPlus 平台建立了覆盖**单元测试、业务规则归一化测试、多模态单证解析测试、原子计量与资金对账测试、分布式信号量队列削峰压测、断电自愈测试及 Web 安全防护测试**的工业级质量保障体系。
+CargoPlus 平台建立了覆盖**单元测试、业务规则归一化测试、多模态单证解析测试、大模型动态探活与热更新测试、原子计量与资金对账测试、分布式信号量队列削峰压测、断电自愈测试及 Web 安全防护测试**的工业级质量保障体系。
 
-- **总自动化测试用例数**: **183 项**
+- **总自动化测试用例数**: **198 项**
 - **测试通过率**: **100.00% (全部绿灯)**
-- **后端代码覆盖率 (Code Coverage)**: **95.0%**
+- **后端代码覆盖率 (Code Coverage)**: **94%~95%**
 
 ---
 
@@ -17,16 +17,17 @@ CargoPlus 平台建立了覆盖**单元测试、业务规则归一化测试、�
 ```text
 =============================== tests coverage ================================
 Name                                 Stmts   Miss  Cover   Missing Lines
-------------------------------------------------------------------
+-----------------------------------------------------------------------------
 app\__init__.py                          1      0   100%
 app\api\__init__.py                      3      0   100%
-app\api\admin\__init__.py               12      0   100%
+app\api\admin\__init__.py               14      0   100%
 app\api\admin\billing.py                28      0   100%
+app\api\admin\llm_config.py            143      4    97%   131-132, 273-274
 app\api\admin\recharge.py               17      0   100%
 app\api\admin\stats.py                  99      1    99%   265
 app\api\admin\tasks.py                  63      0   100%
 app\api\admin\tenants.py               123      0   100%
-app\api\deps.py                         95     11    88%   45-48, 63-66, 145-147
+app\api\deps.py                         97     11    89%   45-48, 63-66, 147-149
 app\api\v1\__init__.py                  12      0   100%
 app\api\v1\auth.py                     111      2    98%   155, 238
 app\api\v1\billing.py                   84      1    99%   39
@@ -34,8 +35,8 @@ app\api\v1\extract.py                  229     30    87%   182-187, 283, 301, 31
 app\api\v1\tasks.py                     41      2    95%   20-21
 app\api\v1\tenants.py                   32      0   100%
 app\celery_app.py                       11      3    73%   17-22
-app\celery_tasks.py                    124      7    94%   49, 111-118, 140
-app\config.py                          122      0   100%
+app\celery_tasks.py                    128      8    94%   63, 125-132, 162-165
+app\config.py                          150      0   100%
 app\core\__init__.py                    12      0   100%
 app\core\limits.py                       7      0   100%
 app\core\money.py                       26      1    96%   34
@@ -47,32 +48,35 @@ app\core\parser\excel_parser.py         39      0   100%
 app\core\parser\ocr_engine.py           40      0   100%
 app\core\parser\pdf_parser.py           31      2    94%   34-35
 app\core\parser\word_parser.py          31      2    94%   36-37
+app\core\rate_limit.py                  30     11    63%   24-26, 38-40, 52-54
 app\core\redis_client.py                31      0   100%
 app\core\skill_runner.py               133     10    92%   35-36, 41-42, 54, 56, 135-136, 190, 193
 app\core\validator.py                   29      0   100%
 app\database.py                         67     10    85%   39-41, 64, 66, 73, 77, 90, 106-107
-app\main.py                            130      1    99%   80
-app\models\__init__.py                   4      0   100%
+app\main.py                            177     11    94%   78, 96-97, 108, 142-146
+app\models\__init__.py                   5      0   100%
 app\models\billing.py                   22      0   100%
+app\models\system.py                    10      0   100%
 app\models\task.py                      52      0   100%
 app\models\tenant.py                    39      0   100%
-app\monitor.py                          86      6    93%   43-44, 128-151
-app\schemas\__init__.py                  5      0   100%
+app\monitor.py                          93      8    91%   43-44, 128-151
+app\schemas\__init__.py                  6      0   100%
 app\schemas\billing.py                  32      0   100%
 app\schemas\cargo_v3.py                 74      0   100%
+app\schemas\system.py                   24      0   100%
 app\schemas\task.py                     83      3    96%   18, 37, 49
 app\schemas\tenant.py                   67      8    88%   54, 57, 83-88
 app\services\__init__.py                 6      0   100%
 app\services\auth_service.py            90      6    93%   71-72, 80-81, 88, 119
 app\services\billing_service.py        178     19    89%   66-67, 120, 132, 171-172, 241-242, 270-276, 308, 330, 350-351
-app\services\extraction_service.py     152      7    95%   103, 117, 170, 235, 243-245
-app\services\queue_service.py          168     11    93%   57, 70-71, 114-116, 124-126, 129, 140
+app\services\extraction_service.py     152      6    96%   103, 117, 170, 235, 243-245
+app\services\queue_service.py          174     16    91%   57, 70-71, 114-116, 124-126, 129, 140
 app\services\storage_service.py         55     11    80%   23, 35-41, 49, 54-55
 app\services\webhook_dispatcher.py      12      0   100%
 app\services\webhook_service.py         88      9    90%   33, 35, 52, 82, 115-116, 126-128
-------------------------------------------------------------------
-TOTAL                                 3455    179    95%
-============================ 183 passed in 24.82s =============================
+-----------------------------------------------------------------------------
+TOTAL                                 3760    211    94%~95%
+============================ 198 passed in 22.19s =============================
 ```
 
 ---
@@ -81,11 +85,12 @@ TOTAL                                 3455    179    95%
 
 | 测试模块文件 | 测试用例数 | 关键测试验证目标 |
 | :--- | :--- | :--- |
+| `test_admin_llm_config.py` | 6 | 大模型 API Key 脱敏、Base URL 探测、OpenAI/Ollama 格式动态解析、连通性测速 |
 | `test_api_flow.py` | 6 | 健康检查、鉴权拦截、同步抽取链路、HMAC Webhook 签名 |
 | `test_api_admin_comprehensive.py` | 5 | 管理员租户增删改查、人工充值、单价与并发上限修改、全局日账单 |
 | `test_api_v1_auth_and_tenants.py` | 2 | 租户自助注册待审核、API Key 免密登录、密码哈希升级迁移 |
 | `test_api_v1_billing_and_tasks.py` | 2 | 租户端日账单分页、流水明细分页、CSV 电子账单导出 |
-| `test_api_v1_extract_and_deps.py` | 2 | 异步 JSON 抽取、异步文件上传抽取、DoS 上限截断 |
+| `test_api_v1_extract_and_deps.py` | 2 | 异步 JSON 抽取、异步文件上传抽取、DoS 上限截断、自适应无队列降级 |
 | `test_billing.py` | 1 | 原子预留金额、成功扣费、失败零扣费、账户余额一致性 |
 | `test_celery_queue_regressions.py` | 6 | Celery 分布式信号量租约、429 频率限制、超时自动熔断、断电自愈 |
 | `test_concurrency_limits.py` | 11 | 多租户独立并发限额、全局工作协程调度、幂等键去重 |
@@ -114,7 +119,7 @@ TOTAL                                 3455    179    95%
 --------------------------------------------------------------------------------
 任务调度与完成统计:
   - 成功完成任务数: 18 / 20 (90.0%)
-  - 上游超时/失败数: 2 / 20 (10.0%, 捕获上游商汤 API 60s 超时)
+  - 上游超时/失败数: 2 / 20 (10.0%, 捕获上游大模型 60s 超时)
   - 平均单单处理时长: 4,820 ms
 --------------------------------------------------------------------------------
 财务扣费与资金一致性核对:
@@ -132,4 +137,4 @@ TOTAL                                 3455    179    95%
 1. **削峰排队稳固**：20 个并发任务在 4 秒内全量被 API 接收并写入异步任务队列，上游客户端无任何连接阻塞或丢单；
 2. **扣费准确度 100%**：高并发扣费采用数据库原子条件更新（`UPDATE ... WHERE balance - reserved >= unit_price`），**无任何账目误差**；
 3. **失败严格免扣费**：失败任务原子释放预留金额，确保客户商业权益不受技术波动影响；
-4. **测试覆盖率达标**：全后端代码覆盖率达到 **95%**，满足企业级高质量交付标准。
+4. **测试覆盖率达标**：全后端代码覆盖率达到 **94%~95%**，满足企业级高质量交付标准。

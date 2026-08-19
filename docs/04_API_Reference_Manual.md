@@ -142,7 +142,24 @@ X-Admin-Secret: cargo-plus-admin-secret-2026
 
 ### 2.6 同步即时抽取任务 (调试与小单证)
 - **Endpoint**: `POST /api/v1/extract/sync`
-- **说明**: 客户端阻塞等待抽取完成并直接返回 57 字段 JSON（大文件或慢速网络建议使用异步模式）。
+- **说明**: 客户端阻塞等待抽取完成并直接返回 57 字段 JSON 及当前使用的实际大模型（大文件或慢速网络建议使用异步模式）。
+- **响应示例 (HTTP 200)**:
+  ```json
+  {
+    "code": 0,
+    "message": "Success",
+    "task_id": "task_9f8e7d6c5b4a3928",
+    "status": "SUCCESS",
+    "duration_ms": 3420,
+    "charged_amount": 0.50,
+    "model_used": "deepseek-v4-flash-0731",
+    "data": {
+      "BookingNo": "COSU638291048",
+      "POLName": "SHANGHAI",
+      "PODName": "ROTTERDAM"
+    }
+  }
+  ```
 
 ---
 
@@ -201,6 +218,95 @@ X-Admin-Secret: cargo-plus-admin-secret-2026
 ---
 
 ## 3. 管理端核心 API 接口 (`/api/admin`)
+
+### 3.1 大模型配置与动态探活接口
+
+#### (1) 获取当前大模型配置
+- **Endpoint**: `GET /admin/llm-config`
+- **Headers**: `X-Admin-Secret: <ADMIN_SECRET_KEY>`
+- **响应示例**:
+  ```json
+  {
+    "base_url": "https://api.senseaudio.cn/v1",
+    "api_key": "",
+    "api_key_masked": "sk-R...5f8c (67 字符)",
+    "is_configured": true,
+    "model": "deepseek-v4-flash-0731",
+    "timeout_seconds": 60,
+    "temperature": 0.0,
+    "runtime_editable": true
+  }
+  ```
+
+#### (2) 保存并热更新大模型配置
+- **Endpoint**: `PUT /admin/llm-config`
+- **请求体**:
+  ```json
+  {
+    "base_url": "https://api.senseaudio.cn/v1",
+    "api_key": "sk-your-new-api-key",
+    "model": "deepseek-v4-flash-0731",
+    "timeout_seconds": 60
+  }
+  ```
+
+#### (3) 探测大模型连通性与往返延迟
+- **Endpoint**: `POST /admin/llm-config/test`
+- **请求体**:
+  ```json
+  {
+    "base_url": "https://api.senseaudio.cn/v1",
+    "api_key": "sk-your-key-here",
+    "model": "deepseek-v4-flash-0731"
+  }
+  ```
+- **响应示例**:
+  ```json
+  {
+    "code": 0,
+    "message": "大模型连通性测试成功！",
+    "data": {
+      "model": "deepseek-v4-flash-0731",
+      "latency_ms": 1280,
+      "response_preview": "{\"status\":\"ok\"}"
+    }
+  }
+  ```
+
+#### (4) 从上游 API 动态拉取可用模型列表
+- **Endpoint**: `POST /admin/llm-config/models`
+- **说明**: 向上游服务商的 `/models` 端点探测，自动解析 OpenAI 与 Ollama 格式并返回可用模型列表。
+- **请求体**:
+  ```json
+  {
+    "base_url": "https://api.senseaudio.cn/v1",
+    "api_key": "sk-your-key-here"
+  }
+  ```
+- **响应示例**:
+  ```json
+  {
+    "code": 0,
+    "message": "成功从 API 获取到 39 个可用模型",
+    "data": {
+      "models": [
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-0731",
+        "deepseek-v4-pro",
+        "glm-5.2",
+        "kimi-k2.6",
+        "qwen3.8-27b",
+        "sensenova-6.8-flash-lite"
+      ],
+      "count": 39,
+      "source": "https://api.senseaudio.cn/v1/models"
+    }
+  }
+  ```
+
+---
+
+### 3.2 租户管理与财务流水接口
 
 | 接口路径 | 方法 | 功能描述 |
 | :--- | :--- | :--- |
