@@ -2,7 +2,6 @@ import logging
 from pathlib import Path
 from typing import Any, List, Tuple
 from pypdf import PdfReader
-from app.core.parser.ocr_engine import extract_ocr_from_bytes
 from app.services.vision_service import VisionBudget, VisionService
 
 logger = logging.getLogger(__name__)
@@ -46,7 +45,7 @@ def parse_pdf(
                         break
 
                     img_bytes = img_file.data
-                    if VisionService.is_valid_document_image(img_bytes) or not page_text.strip():
+                    if VisionService.is_valid_document_image(img_bytes):
                         if not vision_budget.try_acquire():
                             break
                         try:
@@ -55,8 +54,6 @@ def parse_pdf(
                                 filename_hint=f"{file_path.name}_p{page_idx+1}_img{img_idx+1}",
                                 custom_timeout=vision_budget.request_timeout(),
                             )
-                            if not img_transcription.strip():
-                                img_transcription = extract_ocr_from_bytes(img_bytes)
                             if img_transcription.strip():
                                 ocr_parts.append(
                                     f"[PDF第{page_idx+1}页 单证扫描/内嵌图识别内容]:\n{img_transcription.strip()}"

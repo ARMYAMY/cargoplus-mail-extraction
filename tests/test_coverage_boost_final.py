@@ -139,11 +139,13 @@ def test_pdf_parser_scanned_ocr_fallback(tmp_path):
     dummy_pdf.write_bytes(b"%PDF-1.4 dummy scanned")
 
     with patch("app.core.parser.pdf_parser.PdfReader") as mock_reader, \
-         patch("app.core.parser.pdf_parser.extract_ocr_from_bytes", return_value="SCANNED OCR TEXT"):
+         patch("app.core.parser.pdf_parser.VisionService.transcribe_image_sync", return_value="SCANNED OCR TEXT"):
         mock_page = MagicMock()
         mock_page.extract_text.return_value = ""  # Empty text (scanned PDF)
         mock_img = MagicMock()
-        mock_img.data = b"image_data"
+        image_buffer = io.BytesIO()
+        Image.new("RGB", (300, 200), color="white").save(image_buffer, format="PNG")
+        mock_img.data = image_buffer.getvalue()
         mock_page.images = [mock_img]
         mock_reader.return_value.pages = [mock_page]
 

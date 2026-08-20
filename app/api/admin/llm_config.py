@@ -25,8 +25,16 @@ router = APIRouter(prefix="/admin/llm-config", dependencies=[Depends(verify_admi
 # OpenAI-compatible multimodal requests, rather than merely accepting text.
 VISION_PROBE_DATA_URL = (
     "data:image/png;base64,"
-    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAE0lEQVR4nGP8//8/"
-    "AwMDEwMYAAAkBgMBXaJOiAAAAABJRU5ErkJggg=="
+    "iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAIAAABMXPacAAACCklEQVR42u3cMWoiURzA4XFNYae1R4iFzNgo"
+    "U8Z7pPFEQiAQwmDjGSLaqkVgSj2AjZ02oti8LYQpF3TXJMN+v8oRbN7H+z9EfJUQQqTv65clAABAAAAIAAAB"
+    "ACAAAAQAgAAA0P17uPYDlUrFqv25q35isQOMICPoCzba/9Btw9kOMIIACAAAAQAgAAAEAIAAABAAAAIAQAAAC"
+    "AAAAQAgAAAEAIAAABAAAAIAQAAACAAAAQAgAADuU5ZlnU6n1+t1Op3RaHR5s9FoXF5sNps4jrfbbVTSmyWu6"
+    "uYP3tzHx0eaprvdLoSw2+3SNJ1OpyGEer0eQjgej2maLpfL8N3dtjIlAHh6elosFsXjfD7v9/sFwPPz89vbW"
+    "/gB3bYyJRhB6/U6juPiMUmS1Wp1eT0cDmu12mAwcAZ86cy8XItxPp9fXl7KOvpLBPD4+JjnefGY53mr1Yqi"
+    "qFqtfn5+Hg6H19fXqNTXO/3wM2AymaRput/vi0N4NpsVZ8Bms2k2m6vVyiF8x97f3+M47na7SZJkWXZ58wI"
+    "QQhiPx+12+3Q6lRGgcu29S8W1RC5s+icr45uwQxiAAAAQAAACAEAAAAgAAAEAIAAABACAAAAQAAACAEAAAAgA"
+    "AEAAAAgAAAEAIAAABACAAAAQAAACAEBX9hD99R/DZQcA0M2DxJ0bdgAAAQAgAAAEAIAAABAAAAIAQPfvN1r6w"
+    "ARkyhSxAAAAAElFTkSuQmCC"
 )
 
 
@@ -68,9 +76,12 @@ async def get_llm_config(
     timeout_sec = settings.LLM_TIMEOUT_SECONDS
     temp = settings.LLM_TEMPERATURE
 
-    stmt = select(SystemConfig)
-    res = await db.execute(stmt)
-    configs = {c.key: c.value for c in res.scalars().all()}
+    runtime_editable = settings.ENVIRONMENT.lower() != "production"
+    configs = {}
+    if runtime_editable:
+        stmt = select(SystemConfig)
+        res = await db.execute(stmt)
+        configs = {c.key: c.value for c in res.scalars().all()}
 
     if "LLM_BASE_URL" in configs and configs["LLM_BASE_URL"]:
         base_url = configs["LLM_BASE_URL"]
@@ -112,7 +123,7 @@ async def get_llm_config(
         model=model,
         timeout_seconds=timeout_sec,
         temperature=temp,
-        runtime_editable=True,
+        runtime_editable=runtime_editable,
         vision_enabled=v_enabled,
         vision_model=v_model,
         vision_max_images_per_task=v_max_imgs,
@@ -125,6 +136,14 @@ async def update_llm_config(
     db: AsyncSession = Depends(get_db),
 ):
     """更新大模型及多模态视觉模型配置，即时生效并持久化至数据库。"""
+    if settings.ENVIRONMENT.lower() == "production":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": 40901,
+                "message": "生产环境使用部署变量与 Docker secrets；请修改部署配置并重启 API/worker。",
+            },
+        )
     base_url = _validate_base_url(data.base_url.strip())
 
     # If api_key is provided and not empty, update it. If omitted or whitespace only, preserve existing key.

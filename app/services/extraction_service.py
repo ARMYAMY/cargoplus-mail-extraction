@@ -112,10 +112,11 @@ class ExtractionService:
 
         # Step 1: Prepare Payload
         try:
+            # Development Celery workers are separate processes, so refresh all
+            # database-backed model settings before both text and file tasks.
+            # Production uses immutable deployment environment and this is a no-op.
+            await VisionService.refresh_runtime_settings()
             if input_type == "FILE" and file_paths_str:
-                # API and Celery workers are separate processes. Refresh system-wide
-                # vision controls for every task so admin changes take effect safely.
-                await VisionService.refresh_runtime_settings()
                 vision_budget = VisionBudget(settings.VISION_MAX_IMAGES_PER_TASK)
                 stored_paths = json.loads(file_paths_str)
                 if not isinstance(stored_paths, list) or len(stored_paths) > settings.MAX_UPLOAD_FILES:

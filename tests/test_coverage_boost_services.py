@@ -172,7 +172,13 @@ async def test_extraction_service_pipeline_and_failures():
         db.add(task_ok)
         await db.commit()
 
-        with patch("app.core.skill_runner.SkillRunner.extract_draft_json", new_callable=AsyncMock) as mock_llm:
+        with (
+            patch("app.core.skill_runner.SkillRunner.extract_draft_json", new_callable=AsyncMock) as mock_llm,
+            patch(
+                "app.services.extraction_service.VisionService.refresh_runtime_settings",
+                new_callable=AsyncMock,
+            ) as mock_refresh_config,
+        ):
             mock_llm.return_value = {
                 "ShipperName": "COSCO SHIPPING",
                 "POL": "SHANGHAI",
@@ -180,6 +186,7 @@ async def test_extraction_service_pipeline_and_failures():
                 "ContainerInfo": [],
             }
             await ExtractionService.process_task(task_ok_id, tenant_secret="secret_123")
+            mock_refresh_config.assert_awaited_once()
 
         async with AsyncSessionLocal() as check_db:
             t_ok_check = await check_db.get(EmailTask, task_ok_id)

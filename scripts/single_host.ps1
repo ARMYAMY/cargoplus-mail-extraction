@@ -226,6 +226,8 @@ function Initialize-SingleHostConfiguration {
         $llmBaseUrl = if ($legacy.ContainsKey("LLM_BASE_URL")) { $legacy["LLM_BASE_URL"] } else { "https://api.openai.com/v1" }
         $llmModel = if ($legacy.ContainsKey("LLM_MODEL")) { $legacy["LLM_MODEL"] } else { "gpt-5-mini" }
         $llmFallback = if ($legacy.ContainsKey("LLM_FALLBACK_MODEL")) { $legacy["LLM_FALLBACK_MODEL"] } else { $llmModel }
+        $visionEnabled = if ($legacy.ContainsKey("VISION_LLM_ENABLED")) { $legacy["VISION_LLM_ENABLED"] } else { "false" }
+        $visionModel = if ($legacy.ContainsKey("VISION_LLM_MODEL")) { $legacy["VISION_LLM_MODEL"] } else { "qwen3.8-27b" }
         $lines = @(
             "CARGOPLUS_IMAGE=cargoplus-app:single-host",
             "HTTP_PORT=80",
@@ -248,6 +250,10 @@ function Initialize-SingleHostConfiguration {
             "LLM_BASE_URL=$llmBaseUrl",
             "LLM_MODEL=$llmModel",
             "LLM_FALLBACK_MODEL=$llmFallback",
+            "VISION_LLM_ENABLED=$visionEnabled",
+            "VISION_LLM_MODEL=$visionModel",
+            "VISION_LLM_TIMEOUT_SECONDS=30",
+            "VISION_MAX_IMAGES_PER_TASK=5",
             "CORS_ALLOWED_ORIGINS=https://$httpsHost"
         )
         [IO.File]::WriteAllLines($singleHostEnv, $lines, $utf8NoBom)
@@ -255,6 +261,10 @@ function Initialize-SingleHostConfiguration {
     Set-DotEnvValue $singleHostEnv "HTTP_PORT" "80" -OnlyIfMissing
     Set-DotEnvValue $singleHostEnv "HTTPS_PORT" "443" -OnlyIfMissing
     Set-DotEnvValue $singleHostEnv "SINGLE_HOST_HTTPS_HOST" $httpsHost -OnlyIfMissing
+    Set-DotEnvValue $singleHostEnv "VISION_LLM_ENABLED" "false" -OnlyIfMissing
+    Set-DotEnvValue $singleHostEnv "VISION_LLM_MODEL" "qwen3.8-27b" -OnlyIfMissing
+    Set-DotEnvValue $singleHostEnv "VISION_LLM_TIMEOUT_SECONDS" "30" -OnlyIfMissing
+    Set-DotEnvValue $singleHostEnv "VISION_MAX_IMAGES_PER_TASK" "5" -OnlyIfMissing
     # Upgrade the previous loopback HTTP deployment to the single public HTTPS origin.
     Set-DotEnvValue $singleHostEnv "CORS_ALLOWED_ORIGINS" "https://$httpsHost"
 }

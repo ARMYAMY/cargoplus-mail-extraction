@@ -111,6 +111,35 @@ async def test_admin_requires_explicit_auth_and_login_returns_session_token():
 
 
 @pytest.mark.asyncio
+async def test_sliding_session_preserves_ttl_and_skips_failed_responses():
+    await init_db()
+    tenant_id, _ = await _create_tenant_with_key()
+    token = create_access_token(tenant_id, expires_in=60)
+    original_claims = verify_access_token(token, expected_role="tenant")
+    assert original_claims is not None
+
+    with patch("app.main.time.time", return_value=original_claims["iat"] + 10):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            success = await client.get(
+                "/api/v1/billing/summary",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            forbidden = await client.get(
+                "/admin/stats",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+    assert success.status_code == 200
+    refreshed = success.headers.get("X-Refreshed-Token")
+    assert refreshed
+    refreshed_claims = verify_access_token(refreshed, expected_role="tenant")
+    assert refreshed_claims is not None
+    assert refreshed_claims["exp"] - refreshed_claims["iat"] == 60
+    assert forbidden.status_code == 403
+    assert "X-Refreshed-Token" not in forbidden.headers
+
+
+@pytest.mark.asyncio
 async def test_inactive_tenant_cannot_log_in_with_api_key():
     await init_db()
     _, raw_key = await _create_tenant_with_key(active=False)

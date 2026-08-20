@@ -253,7 +253,7 @@ async def handle_sliding_session_renewal(request: Request, call_next):
         try:
             from app.services.auth_service import verify_access_token, create_access_token
             claims = verify_access_token(token)
-            if claims:
+            if claims and 200 <= response.status_code < 400:
                 now = int(time.time())
                 exp = int(claims.get("exp", 0))
                 iat = int(claims.get("iat", 0))
@@ -261,7 +261,11 @@ async def handle_sliding_session_renewal(request: Request, call_next):
                 elapsed = now - iat
                 # If more than 15% of token lifetime has elapsed, silently renew the token
                 if elapsed > (total_ttl * 0.15):
-                    refreshed = create_access_token(claims["sub"], role=claims.get("role", "tenant"))
+                    refreshed = create_access_token(
+                        claims["sub"],
+                        role=claims.get("role", "tenant"),
+                        expires_in=total_ttl,
+                    )
                     response.headers["X-Refreshed-Token"] = refreshed
         except Exception:
             pass

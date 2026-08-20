@@ -2242,6 +2242,8 @@ MEAS: 68.000 CBM`;
     }
   });
 
+  let llmRuntimeEditable = true;
+
   async function loadLLMConfig() {
     try {
       const res = await adminFetch('/admin/llm-config');
@@ -2259,6 +2261,7 @@ MEAS: 68.000 CBM`;
       const saveButton = document.getElementById('btn-save-llm-config');
       const testButton = document.getElementById('btn-test-llm-connection');
       const modelSelect = document.getElementById('llm-cfg-model');
+      const fetchModelsButton = document.getElementById('btn-fetch-remote-models');
 
       if (baseUrlInput) baseUrlInput.value = data.base_url || '';
       if (apiKeyInput) {
@@ -2276,6 +2279,8 @@ MEAS: 68.000 CBM`;
       const visionSettingsBody = document.getElementById('vision-settings-body');
       const visionStatusBadge = document.getElementById('vision-status-badge');
       const visionMaxImagesInput = document.getElementById('vision-cfg-max-images');
+      const visionModelSelect = document.getElementById('vision-cfg-model-select');
+      const visionCustomModelInput = document.getElementById('vision-cfg-custom-model');
 
       if (visionEnabledCb) {
         visionEnabledCb.checked = !!data.vision_enabled;
@@ -2290,19 +2295,39 @@ MEAS: 68.000 CBM`;
       setSelectedVisionModel(data.vision_model || 'qwen3.8-27b');
       if (visionMaxImagesInput) visionMaxImagesInput.value = data.vision_max_images_per_task || 5;
 
-      // Always ensure editable
-      [baseUrlInput, apiKeyInput, modelSelect, timeoutInput, visionMaxImagesInput].forEach((input) => {
-        if (input) input.disabled = false;
+      llmRuntimeEditable = data.runtime_editable !== false;
+      [
+        baseUrlInput,
+        apiKeyInput,
+        modelSelect,
+        timeoutInput,
+        visionEnabledCb,
+        visionMaxImagesInput,
+        visionModelSelect,
+        visionCustomModelInput,
+      ].forEach((input) => {
+        if (input) input.disabled = !llmRuntimeEditable;
       });
-      if (saveButton) saveButton.disabled = false;
+      if (saveButton) {
+        saveButton.disabled = !llmRuntimeEditable;
+        saveButton.title = llmRuntimeEditable
+          ? '保存并应用配置'
+          : '生产环境配置由部署变量与 Docker secrets 管理';
+      }
+      if (fetchModelsButton) fetchModelsButton.disabled = !llmRuntimeEditable;
+      document.querySelectorAll('#llm-preset-buttons button').forEach((button) => {
+        button.disabled = !llmRuntimeEditable;
+      });
       if (testButton) testButton.disabled = false;
 
       if (statusBadge) {
         if (data.is_configured) {
-          statusBadge.textContent = '已就绪 (已配置)';
+          statusBadge.textContent = llmRuntimeEditable ? '已就绪 (已配置)' : '已就绪 (部署配置)';
           statusBadge.className = 'badge badge-success';
-          // Dynamically populate remote models on load
-          fetchRemoteModels(true);
+          if (llmRuntimeEditable) {
+            // Dynamically populate remote models only when selections can be saved.
+            fetchRemoteModels(true);
+          }
         } else {
           statusBadge.textContent = '未配置 API Key';
           statusBadge.className = 'badge badge-warning';
@@ -2315,6 +2340,10 @@ MEAS: 68.000 CBM`;
   }
 
   async function saveLLMConfig() {
+    if (!llmRuntimeEditable) {
+      showToast('warning', '生产环境配置由部署变量与 Docker secrets 管理，请修改部署配置后重启服务');
+      return;
+    }
     const baseUrl = document.getElementById('llm-cfg-base-url')?.value.trim();
     const apiKey = document.getElementById('llm-cfg-api-key')?.value.trim();
     const model = getSelectedModel();
@@ -2386,7 +2415,7 @@ MEAS: 68.000 CBM`;
       showToast('error', '保存配置网络异常: ' + err.message);
     } finally {
       if (btnSave) {
-        btnSave.disabled = false;
+        btnSave.disabled = !llmRuntimeEditable;
         btnSave.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> <span>保存并应用配置</span>';
       }
     }

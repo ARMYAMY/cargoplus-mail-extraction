@@ -11,6 +11,7 @@ from app.database import AsyncSessionLocal, init_db
 from app.main import app, load_dynamic_system_config
 from app.models.system import SystemConfig
 from app.api.admin.llm_config import VISION_PROBE_DATA_URL, _mask_api_key, _validate_base_url
+from app.services.auth_service import create_access_token
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -140,6 +141,33 @@ async def test_update_llm_config_validation_and_persistence():
 
 
 @pytest.mark.asyncio
+async def test_production_llm_config_is_read_only_and_ignores_database_overrides():
+    transport = ASGITransport(app=app)
+    admin_token = create_access_token("admin", role="admin")
+    with (
+        patch.object(settings, "ENVIRONMENT", "production"),
+        patch.object(settings, "LLM_BASE_URL", "https://deployment.test/v1"),
+        patch.object(settings, "LLM_API_KEY", "deployment-secret"),
+        patch.object(settings, "LLM_MODEL", "deployment-model"),
+        patch.object(settings, "VISION_LLM_ENABLED", True),
+    ):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            headers = {"Authorization": f"Bearer {admin_token}"}
+            current = await client.get("/admin/llm-config", headers=headers)
+            update = await client.put(
+                "/admin/llm-config",
+                json={"base_url": "https://ignored.test/v1", "model": "ignored-model"},
+                headers=headers,
+            )
+
+    assert current.status_code == 200
+    assert current.json()["runtime_editable"] is False
+    assert current.json()["base_url"] == "https://deployment.test/v1"
+    assert current.json()["model"] == "deployment-model"
+    assert update.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_test_llm_connection_all_branches():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -245,7 +273,7 @@ async def test_vision_connection_probe_contains_an_image():
     probe_bytes = base64.b64decode(VISION_PROBE_DATA_URL.split(",", 1)[1])
     with Image.open(io.BytesIO(probe_bytes)) as probe_image:
         probe_image.load()
-        assert probe_image.size == (2, 2)
+        assert probe_image.size == (128, 128)
 
     mock_resp = MagicMock()
     mock_resp.status_code = 200

@@ -64,6 +64,18 @@ def test_invalid_or_oversized_image_is_never_forwarded():
     mock_post.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_async_invalid_image_does_not_bypass_validation_to_local_ocr():
+    with patch.object(VisionService, "_local_ocr") as mock_local_ocr:
+        result = await VisionService.transcribe_image_async(
+            b"not-an-image",
+            enabled=False,
+        )
+
+    assert result == ""
+    mock_local_ocr.assert_not_called()
+
+
 def test_vision_budget_enforces_attempt_and_time_limits():
     attempt_budget = VisionBudget(max_attempts=1)
     assert attempt_budget.try_acquire() is True
@@ -190,6 +202,24 @@ def test_pdf_parser_with_embedded_image(tmp_path):
         assert "MSK55667788" in ocr_text
 
 
+def test_pdf_parser_rejects_invalid_image_on_textless_page(tmp_path):
+    pdf_file = tmp_path / "invalid_scan.pdf"
+    page = MagicMock()
+    page.extract_text.return_value = ""
+    page.images = [MagicMock(data=b"not-an-image")]
+    reader = MagicMock()
+    reader.pages = [page]
+
+    with (
+        patch("app.core.parser.pdf_parser.PdfReader", return_value=reader),
+        patch.object(VisionService, "transcribe_image_sync") as mock_transcribe,
+    ):
+        _, _, ocr_text = parse_pdf(pdf_file)
+
+    assert ocr_text == ""
+    mock_transcribe.assert_not_called()
+
+
 def test_word_parser_counts_failed_attempts_against_task_budget(tmp_path):
     doc_file = tmp_path / "two_images.docx"
     doc = docx.Document()
@@ -209,6 +239,11 @@ def test_word_parser_counts_failed_attempts_against_task_budget(tmp_path):
 async def test_worker_refreshes_persisted_vision_controls():
     await init_db()
     keys = {
+        "LLM_BASE_URL": "https://worker-config.test/v1",
+        "LLM_API_KEY": "worker-secret",
+        "LLM_MODEL": "worker-main-model",
+        "LLM_TIMEOUT_SECONDS": "55",
+        "LLM_TEMPERATURE": "0.25",
         "VISION_LLM_ENABLED": "false",
         "VISION_LLM_MODEL": "vision-worker-test",
         "VISION_LLM_TIMEOUT_SECONDS": "44",
@@ -224,12 +259,31 @@ async def test_worker_refreshes_persisted_vision_controls():
         patch.object(settings, "VISION_LLM_MODEL", "stale-model"),
         patch.object(settings, "VISION_LLM_TIMEOUT_SECONDS", 30),
         patch.object(settings, "VISION_MAX_IMAGES_PER_TASK", 5),
+        patch.object(settings, "LLM_BASE_URL", "https://stale.test/v1"),
+        patch.object(settings, "LLM_API_KEY", "stale-secret"),
+        patch.object(settings, "LLM_MODEL", "stale-main-model"),
+        patch.object(settings, "LLM_TIMEOUT_SECONDS", 30),
+        patch.object(settings, "LLM_TEMPERATURE", 0.0),
     ):
         await VisionService.refresh_runtime_settings()
+        assert settings.LLM_BASE_URL == "https://worker-config.test/v1"
+        assert settings.LLM_API_KEY == "worker-secret"
+        assert settings.LLM_MODEL == "worker-main-model"
+        assert settings.LLM_TIMEOUT_SECONDS == 55
+        assert settings.LLM_TEMPERATURE == 0.25
         assert settings.VISION_LLM_ENABLED is False
         assert settings.VISION_LLM_MODEL == "vision-worker-test"
         assert settings.VISION_LLM_TIMEOUT_SECONDS == 44
         assert settings.VISION_MAX_IMAGES_PER_TASK == 3
+
+    with (
+        patch.object(settings, "ENVIRONMENT", "production"),
+        patch.object(settings, "LLM_MODEL", "deployment-main-model"),
+        patch.object(settings, "VISION_LLM_MODEL", "deployment-vision-model"),
+    ):
+        await VisionService.refresh_runtime_settings()
+        assert settings.LLM_MODEL == "deployment-main-model"
+        assert settings.VISION_LLM_MODEL == "deployment-vision-model"
 
     async with AsyncSessionLocal() as db:
         await db.execute(delete(SystemConfig).where(SystemConfig.key.in_(keys)))

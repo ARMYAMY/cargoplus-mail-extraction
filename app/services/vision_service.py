@@ -68,21 +68,24 @@ class VisionBudget:
 
 class VisionService:
     @staticmethod
-    def _local_ocr(image_bytes: bytes) -> str:
-        # Local import avoids a parser -> vision -> parser import cycle.
-        from app.core.parser.ocr_engine import extract_ocr_from_bytes
-
-        return extract_ocr_from_bytes(image_bytes)
-
-    @staticmethod
     async def refresh_runtime_settings() -> None:
-        """Refresh non-secret vision settings in every worker before a task runs."""
+        """Refresh development runtime overrides in every worker before a task runs."""
+        if settings.ENVIRONMENT.lower() == "production":
+            # Production API and workers share immutable deployment environment
+            # and Docker secrets. Runtime database overrides are intentionally
+            # disabled so processes cannot drift from one another.
+            return
         try:
             async with AsyncSessionLocal() as db:
                 result = await db.execute(
                     select(SystemConfig).where(
                         SystemConfig.key.in_(
                             {
+                                "LLM_BASE_URL",
+                                "LLM_API_KEY",
+                                "LLM_MODEL",
+                                "LLM_TIMEOUT_SECONDS",
+                                "LLM_TEMPERATURE",
                                 "VISION_LLM_ENABLED",
                                 "VISION_LLM_MODEL",
                                 "VISION_LLM_TIMEOUT_SECONDS",
@@ -92,6 +95,30 @@ class VisionService:
                     )
                 )
                 configs = {item.key: item.value for item in result.scalars().all()}
+
+            base_url = configs.get("LLM_BASE_URL", "").strip()
+            if base_url.startswith(("http://", "https://")):
+                settings.LLM_BASE_URL = base_url.rstrip("/")
+            api_key = configs.get("LLM_API_KEY", "").strip()
+            if api_key:
+                settings.LLM_API_KEY = api_key
+            llm_model = configs.get("LLM_MODEL", "").strip()
+            if llm_model:
+                settings.LLM_MODEL = llm_model[:128]
+            try:
+                if configs.get("LLM_TIMEOUT_SECONDS"):
+                    settings.LLM_TIMEOUT_SECONDS = max(
+                        5, min(600, int(configs["LLM_TIMEOUT_SECONDS"]))
+                    )
+            except ValueError:
+                logger.warning("Ignoring invalid LLM_TIMEOUT_SECONDS in system config")
+            try:
+                if configs.get("LLM_TEMPERATURE"):
+                    settings.LLM_TEMPERATURE = max(
+                        0.0, min(2.0, float(configs["LLM_TEMPERATURE"]))
+                    )
+            except ValueError:
+                logger.warning("Ignoring invalid LLM_TEMPERATURE in system config")
 
             if "VISION_LLM_ENABLED" in configs:
                 settings.VISION_LLM_ENABLED = configs["VISION_LLM_ENABLED"].lower() in {
@@ -216,7 +243,7 @@ class VisionService:
         # Validate and normalize before either remote or local OCR.
         optimized_bytes = cls.optimize_image_for_vision(image_bytes)
         if optimized_bytes is None:
-            return cls._local_ocr(image_bytes)
+            return ""
         if not is_enabled or not api_key or not api_key.strip():
             logger.debug("Vision LLM is not enabled or API key empty; using RapidOCR fallback")
             return cls._local_ocr(optimized_bytes)

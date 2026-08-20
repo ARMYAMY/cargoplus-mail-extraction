@@ -2,7 +2,6 @@ import logging
 from pathlib import Path
 from typing import Any, List, Tuple
 from docx import Document
-from app.core.parser.ocr_engine import extract_ocr_from_bytes
 from app.services.vision_service import VisionBudget, VisionService
 
 logger = logging.getLogger(__name__)
