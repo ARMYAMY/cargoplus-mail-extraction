@@ -774,6 +774,11 @@
       }
     });
 
+    // Check for expired session redirect parameter
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('expired') === '1') {
+      showToast('warning', '您的登录会话已到期，请重新输入账号与密码登录。', '会话已过期');
+    }
   </script>
 </body>
 </html>

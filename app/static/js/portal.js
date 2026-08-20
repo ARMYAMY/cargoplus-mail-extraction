@@ -71,21 +71,51 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  let isRedirectingPortal = false;
+
   function getAuthHeaders() {
     const headers = {
       'Content-Type': 'application/json',
     };
-    if (isAdmin) {
-      headers['Authorization'] = `Bearer ${adminToken}`;
+    const activeAdminToken = localStorage.getItem('cargo_admin_token') || '';
+    const activeApiKey = localStorage.getItem('cargo_portal_api_key') || '';
+
+    if (activeAdminToken) {
+      headers['Authorization'] = `Bearer ${activeAdminToken}`;
       if (currentTenantId) {
         headers['X-Tenant-ID'] = currentTenantId;
       }
-    } else {
-      if (currentApiKey) {
-        headers['Authorization'] = `Bearer ${currentApiKey}`;
-      }
+    } else if (activeApiKey) {
+      headers['Authorization'] = `Bearer ${activeApiKey}`;
     }
     return headers;
+  }
+
+  async function portalFetch(url, options = {}) {
+    const headers = new Headers(options.headers || getAuthHeaders());
+    try {
+      const response = await fetch(url, { ...options, headers });
+      const refreshedToken = response.headers.get('X-Refreshed-Token');
+      if (refreshedToken) {
+        if (localStorage.getItem('cargo_admin_token')) {
+          localStorage.setItem('cargo_admin_token', refreshedToken);
+        } else {
+          localStorage.setItem('cargo_portal_api_key', refreshedToken);
+        }
+      }
+      if ((response.status === 401 || response.status === 403) && !isRedirectingPortal) {
+        isRedirectingPortal = true;
+        localStorage.removeItem('cargo_admin_token');
+        localStorage.removeItem('cargo_portal_api_key');
+        showToast('error', '登录会话已过期，请重新登录，正在跳转...', '会话已过期');
+        setTimeout(() => {
+          window.location.href = '/login?expired=1';
+        }, 1200);
+      }
+      return response;
+    } catch (err) {
+      throw err;
+    }
   }
 
   // Initialize UI by Role
@@ -98,7 +128,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (adminBtn) adminBtn.hidden = false;
 
       try {
-        const res = await fetch('/admin/tenants', { headers: getAuthHeaders() });
+        const res = await portalFetch('/admin/tenants');
         if (res.ok) {
           allTenants = await res.json();
           const sel = document.getElementById('portal-tenant-select');
@@ -148,7 +178,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 1. Header & Summary Metrics
   async function loadTenantHeaderAndSummary() {
     try {
-      const res = await fetch('/api/v1/billing/summary', { headers: getAuthHeaders() });
+      const res = await portalFetch('/api/v1/billing/summary');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const summary = await res.json();
 
@@ -172,7 +202,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       // Fetch failed tasks count
-      const tasksRes = await fetch(`/api/v1/tasks?page=1&page_size=100`, { headers: getAuthHeaders() });
+      const tasksRes = await portalFetch(`/api/v1/tasks?page=1&page_size=100`);
       if (tasksRes.ok) {
         const tasksData = await tasksRes.json();
         const failedCount = (tasksData.items || []).filter((t) => t.status === 'FAILED').length;
@@ -191,7 +221,7 @@ document.addEventListener('DOMContentLoaded', () => {
   async function loadDailyStatements() {
     const tbody = document.querySelector('#table-daily-statement tbody');
     try {
-      const res = await fetch(`/api/v1/billing/statements/daily?days=90&page=${portalDailyPage}&page_size=${portalDailyPageSize}`, { headers: getAuthHeaders() });
+      const res = await portalFetch(`/api/v1/billing/statements/daily?days=90&page=${portalDailyPage}&page_size=${portalDailyPageSize}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
 
@@ -272,7 +302,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeFilter) url += `&type=${typeFilter}`;
 
     try {
-      const res = await fetch(url, { headers: getAuthHeaders() });
+      const res = await portalFetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const txs = data.items || data;
@@ -355,7 +385,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (statusFilter) url += `&status=${statusFilter}`;
 
     try {
-      const res = await fetch(url, { headers: getAuthHeaders() });
+      const res = await portalFetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const items = data.items || [];
@@ -433,7 +463,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 5. Task Detail Inspector Modal
   window.viewTaskDetail = async function (taskId) {
     try {
-      const res = await fetch(`/api/v1/tasks/${taskId}`, { headers: getAuthHeaders() });
+      const res = await portalFetch(`/api/v1/tasks/${taskId}`);
       if (!res.ok) throw new Error('任务查询失败');
       const task = await res.json();
 
@@ -465,7 +495,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 6. CSV Export triggers
   async function triggerCsvDownload(url) {
     try {
-      const res = await fetch(url, { headers: getAuthHeaders() });
+      const res = await portalFetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blobUrl = URL.createObjectURL(await res.blob());
       const link = document.createElement('a');
@@ -522,7 +552,7 @@ document.addEventListener('DOMContentLoaded', () => {
     tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">正在查询密钥...</td></tr>';
 
     try {
-      const res = await fetch('/api/v1/tenants/me/keys', { headers: getAuthHeaders() });
+      const res = await portalFetch('/api/v1/tenants/me/keys');
       if (!res.ok) throw new Error('查询密钥失败');
       const keys = await res.json();
 
@@ -560,9 +590,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (keyName === null || !keyName.trim()) return;
 
     try {
-      const res = await fetch(`/api/v1/tenants/me/keys?key_name=${encodeURIComponent(keyName.trim())}`, {
+      const res = await portalFetch(`/api/v1/tenants/me/keys?key_name=${encodeURIComponent(keyName.trim())}`, {
         method: 'POST',
-        headers: getAuthHeaders(),
       });
       if (!res.ok) throw new Error('生成新密钥失败');
       const data = await res.json();

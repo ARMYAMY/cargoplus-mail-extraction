@@ -18,6 +18,7 @@ from app.core.normalizer import default_normalizer
 from app.core.parser import process_uploaded_files
 from app.core.validator import default_validator
 from app.services.billing_service import BillingService
+from app.services.vision_service import VisionBudget, VisionService
 from app.services.webhook_dispatcher import dispatch_webhook
 
 logger = logging.getLogger(__name__)
@@ -112,6 +113,10 @@ class ExtractionService:
         # Step 1: Prepare Payload
         try:
             if input_type == "FILE" and file_paths_str:
+                # API and Celery workers are separate processes. Refresh system-wide
+                # vision controls for every task so admin changes take effect safely.
+                await VisionService.refresh_runtime_settings()
+                vision_budget = VisionBudget(settings.VISION_MAX_IMAGES_PER_TASK)
                 stored_paths = json.loads(file_paths_str)
                 if not isinstance(stored_paths, list) or len(stored_paths) > settings.MAX_UPLOAD_FILES:
                     raise ValueError("Invalid stored upload path list")
@@ -128,6 +133,7 @@ class ExtractionService:
                     subject=mail_subject or "",
                     body="",
                     temp_dir=settings.uploads_path,
+                    vision_budget=vision_budget,
                 )
             else:
                 raw_dict = json.loads(raw_input_json or "{}")

@@ -3,7 +3,7 @@ from decimal import Decimal
 import logging
 from pathlib import Path
 import time
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -95,6 +95,21 @@ async def load_dynamic_system_config():
                     settings.LLM_TIMEOUT_SECONDS = int(configs["LLM_TIMEOUT_SECONDS"])
                 except ValueError:
                     pass
+            # Multimodal Vision Settings
+            if "VISION_LLM_ENABLED" in configs:
+                settings.VISION_LLM_ENABLED = configs["VISION_LLM_ENABLED"].lower() in {"1", "true", "yes"}
+            if "VISION_LLM_MODEL" in configs and configs["VISION_LLM_MODEL"]:
+                settings.VISION_LLM_MODEL = configs["VISION_LLM_MODEL"].strip()
+            if "VISION_LLM_TIMEOUT_SECONDS" in configs and configs["VISION_LLM_TIMEOUT_SECONDS"]:
+                try:
+                    settings.VISION_LLM_TIMEOUT_SECONDS = int(configs["VISION_LLM_TIMEOUT_SECONDS"])
+                except ValueError:
+                    pass
+            if "VISION_MAX_IMAGES_PER_TASK" in configs and configs["VISION_MAX_IMAGES_PER_TASK"]:
+                try:
+                    settings.VISION_MAX_IMAGES_PER_TASK = int(configs["VISION_MAX_IMAGES_PER_TASK"])
+                except ValueError:
+                    pass
     except Exception as exc:
         logger.warning("Failed to load dynamic system config: %s", exc)
 
@@ -146,6 +161,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Refreshed-Token"],
 )
 
 # Mount static files
@@ -225,6 +241,30 @@ async def add_security_headers(request, call_next):
         )
     if request.url.path.startswith(("/api/", "/admin/")):
         response.headers.setdefault("Cache-Control", "no-store")
+    return response
+
+
+@app.middleware("http")
+async def handle_sliding_session_renewal(request: Request, call_next):
+    response = await call_next(request)
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+        try:
+            from app.services.auth_service import verify_access_token, create_access_token
+            claims = verify_access_token(token)
+            if claims:
+                now = int(time.time())
+                exp = int(claims.get("exp", 0))
+                iat = int(claims.get("iat", 0))
+                total_ttl = exp - iat if (exp > iat) else settings.AUTH_TOKEN_TTL_SECONDS
+                elapsed = now - iat
+                # If more than 15% of token lifetime has elapsed, silently renew the token
+                if elapsed > (total_ttl * 0.15):
+                    refreshed = create_access_token(claims["sub"], role=claims.get("role", "tenant"))
+                    response.headers["X-Refreshed-Token"] = refreshed
+        except Exception:
+            pass
     return response
 
 

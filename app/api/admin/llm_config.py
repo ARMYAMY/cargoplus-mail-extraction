@@ -21,6 +21,14 @@ from app.schemas.system import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/llm-config", dependencies=[Depends(verify_admin_access)])
 
+# A tiny deterministic PNG used only to verify that the configured model accepts
+# OpenAI-compatible multimodal requests, rather than merely accepting text.
+VISION_PROBE_DATA_URL = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAE0lEQVR4nGP8//8/"
+    "AwMDEwMYAAAkBgMBXaJOiAAAAABJRU5ErkJggg=="
+)
+
 
 def _validate_base_url(base_url: str) -> str:
     parsed = urlparse(base_url)
@@ -81,6 +89,21 @@ async def get_llm_config(
         except ValueError:
             pass
 
+    # Vision settings (Shares Base URL & API Key)
+    v_enabled = settings.VISION_LLM_ENABLED
+    v_model = settings.VISION_LLM_MODEL
+    v_max_imgs = settings.VISION_MAX_IMAGES_PER_TASK
+
+    if "VISION_LLM_ENABLED" in configs:
+        v_enabled = configs["VISION_LLM_ENABLED"].lower() in {"1", "true", "yes"}
+    if "VISION_LLM_MODEL" in configs and configs["VISION_LLM_MODEL"]:
+        v_model = configs["VISION_LLM_MODEL"]
+    if "VISION_MAX_IMAGES_PER_TASK" in configs and configs["VISION_MAX_IMAGES_PER_TASK"]:
+        try:
+            v_max_imgs = int(configs["VISION_MAX_IMAGES_PER_TASK"])
+        except ValueError:
+            pass
+
     return LLMConfigResponse(
         base_url=base_url,
         api_key="",
@@ -90,6 +113,9 @@ async def get_llm_config(
         timeout_seconds=timeout_sec,
         temperature=temp,
         runtime_editable=True,
+        vision_enabled=v_enabled,
+        vision_model=v_model,
+        vision_max_images_per_task=v_max_imgs,
     )
 
 
@@ -98,7 +124,7 @@ async def update_llm_config(
     data: LLMConfigUpdate,
     db: AsyncSession = Depends(get_db),
 ):
-    """更新大模型 API 基础地址、API Key 及模型配置，即时生效并持久化至数据库。"""
+    """更新大模型及多模态视觉模型配置，即时生效并持久化至数据库。"""
     base_url = _validate_base_url(data.base_url.strip())
 
     # If api_key is provided and not empty, update it. If omitted or whitespace only, preserve existing key.
@@ -112,6 +138,11 @@ async def update_llm_config(
     timeout_seconds = data.timeout_seconds if data.timeout_seconds is not None else 60
     temperature = data.temperature if data.temperature is not None else 0.0
 
+    # Vision fields
+    v_enabled = data.vision_enabled if data.vision_enabled is not None else settings.VISION_LLM_ENABLED
+    v_model = (data.vision_model or settings.VISION_LLM_MODEL or "qwen3.8-27b").strip()
+    v_max_imgs = data.vision_max_images_per_task if data.vision_max_images_per_task is not None else settings.VISION_MAX_IMAGES_PER_TASK
+
     # Save to database
     kv_pairs = {
         "LLM_BASE_URL": base_url,
@@ -119,6 +150,9 @@ async def update_llm_config(
         "LLM_MODEL": model,
         "LLM_TIMEOUT_SECONDS": str(timeout_seconds),
         "LLM_TEMPERATURE": str(temperature),
+        "VISION_LLM_ENABLED": "true" if v_enabled else "false",
+        "VISION_LLM_MODEL": v_model,
+        "VISION_MAX_IMAGES_PER_TASK": str(v_max_imgs),
     }
 
     for k, v in kv_pairs.items():
@@ -140,7 +174,11 @@ async def update_llm_config(
     settings.LLM_TIMEOUT_SECONDS = timeout_seconds
     settings.LLM_TEMPERATURE = temperature
 
-    logger.info(f"Admin updated LLM configuration: Base URL={base_url}, Model={model}")
+    settings.VISION_LLM_ENABLED = v_enabled
+    settings.VISION_LLM_MODEL = v_model
+    settings.VISION_MAX_IMAGES_PER_TASK = v_max_imgs
+
+    logger.info(f"Admin updated LLM & Vision configuration: LLM Model={model}, Vision Enabled={v_enabled}, Vision Model={v_model}")
 
     return LLMConfigResponse(
         base_url=base_url,
@@ -151,21 +189,26 @@ async def update_llm_config(
         timeout_seconds=timeout_seconds,
         temperature=temperature,
         runtime_editable=True,
+        vision_enabled=v_enabled,
+        vision_model=v_model,
+        vision_max_images_per_task=v_max_imgs,
     )
 
 
-@router.post("/test", summary="测试大模型 API 连通性")
+@router.post("/test", summary="测试大模型与多模态视觉 API 连通性")
 async def test_llm_connection(
     data: Optional[LLMTestRequest] = None,
 ):
     """
-    向指定或当前配置的大模型 API 发送快速探测请求，验证 Base URL 和 API Key 的连通性与可用性。
+    向指定或当前配置的大模型 API 发送快速探测请求，分别验证主抽取模型和多模态视觉模型的连通性与可用性。
     """
     base_url = _validate_base_url(
         data.base_url.strip() if data and data.base_url else settings.LLM_BASE_URL
     )
     api_key = data.api_key.strip() if data and data.api_key else settings.LLM_API_KEY
-    model = (data.model.strip() if data and data.model else settings.LLM_MODEL)
+    main_model = (data.model.strip() if data and data.model else settings.LLM_MODEL)
+    test_vision = data.vision_enabled if (data and data.vision_enabled is not None) else settings.VISION_LLM_ENABLED
+    vision_model = (data.vision_model.strip() if data and data.vision_model else settings.VISION_LLM_MODEL)
 
     if not api_key:
         raise HTTPException(
@@ -178,61 +221,89 @@ async def test_llm_connection(
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": "ping"}],
-        "max_tokens": 10,
-        "temperature": 0.0,
+
+    async def _ping_model(m_name: str, include_image: bool = False):
+        content = "ping"
+        if include_image:
+            content = [
+                {"type": "text", "text": "请仅回复 OK"},
+                {"type": "image_url", "image_url": {"url": VISION_PROBE_DATA_URL}},
+            ]
+        payload = {
+            "model": m_name,
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": 10,
+            "temperature": 0.0,
+        }
+        st = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(url, json=payload, headers=headers)
+                latency = int((time.monotonic() - st) * 1000)
+                if resp.status_code == 200:
+                    body = resp.json()
+                    choices = body.get("choices", [])
+                    reply = choices[0].get("message", {}).get("content", "").strip() if choices else "OK"
+                    return {"status": "success", "code": 0, "latency_ms": latency, "model": m_name, "preview": reply[:60]}
+                elif resp.status_code == 401:
+                    return {"status": "auth_failed", "code": 401, "latency_ms": latency, "model": m_name, "error": "认证失败 (HTTP 401)：API Key 无效或未授权"}
+                elif resp.status_code == 404:
+                    return {"status": "not_found", "code": 404, "latency_ms": latency, "model": m_name, "error": f"端点未找到或模型不存在 (HTTP 404)"}
+                else:
+                    return {"status": "upstream_error", "code": resp.status_code, "latency_ms": latency, "model": m_name, "error": f"服务返回异常 (HTTP {resp.status_code}): {resp.text[:100]}"}
+        except httpx.TimeoutException:
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail={"code": 50401, "message": f"请求超时 (15s)，无法连接至 {url}，请检查网络或 Base URL 是否可达"},
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={"code": 50201, "message": f"连接大模型接口失败: {str(exc)}"},
+            )
+
+    # Test main model
+    main_result = await _ping_model(main_model)
+
+    # Test vision model if enabled
+    vision_result = None
+    if test_vision and vision_model:
+        try:
+            vision_result = await _ping_model(vision_model, include_image=True)
+        except Exception as v_exc:
+            vision_result = {"status": "error", "code": 1, "model": vision_model, "error": str(v_exc)}
+
+    all_passed = (main_result.get("code") == 0) and (vision_result is None or vision_result.get("code") == 0)
+
+    msg_parts = []
+    if main_result.get("code") == 0:
+        msg_parts.append(f"主模型 [{main_model}] 响应正常 ({main_result['latency_ms']}ms)")
+    else:
+        msg_parts.append(f"主模型 [{main_model}] 失败: {main_result.get('error', '未知错误')}")
+
+    if vision_result:
+        if vision_result.get("code") == 0:
+            msg_parts.append(f"视觉模型 [{vision_model}] 响应正常 ({vision_result['latency_ms']}ms)")
+        else:
+            msg_parts.append(f"视觉模型 [{vision_model}] 失败: {vision_result.get('error', '未知错误')}")
+    elif not test_vision:
+        msg_parts.append("视觉模型未启用")
+
+    summary_msg = " | ".join(msg_parts)
+    return_code = 0 if all_passed else (main_result.get("code") if main_result.get("code") != 0 else (vision_result.get("code", 1) if vision_result else 1))
+
+    return {
+        "code": return_code,
+        "message": summary_msg,
+        "data": {
+            "status": "success" if all_passed else "partial_error",
+            "model": main_model,
+            "latency_ms": main_result.get("latency_ms", 0),
+            "response_preview": main_result.get("preview", ""),
+            "main_model": main_result,
+            "vision_model": vision_result,
+        },
     }
-
-    start_time = time.monotonic()
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-            latency_ms = int((time.monotonic() - start_time) * 1000)
-
-            if resp.status_code == 200:
-                data_json = resp.json()
-                choices = data_json.get("choices", [])
-                reply = choices[0].get("message", {}).get("content", "").strip() if choices else "OK"
-                return {
-                    "code": 0,
-                    "message": f"连接测试成功！大模型响应正常 (耗时: {latency_ms}ms)",
-                    "data": {
-                        "status": "success",
-                        "latency_ms": latency_ms,
-                        "model": model,
-                        "response_preview": reply[:100],
-                    },
-                }
-            elif resp.status_code == 401:
-                return {
-                    "code": 401,
-                    "message": "认证失败 (HTTP 401)：API Key 无效或未授权，请检查密钥是否正确",
-                    "data": {"status": "auth_failed", "http_status": 401},
-                }
-            elif resp.status_code == 404:
-                return {
-                    "code": 404,
-                    "message": f"地址错误 (HTTP 404)：未找到端点 {url}，请确认 Base URL 路径是否正确",
-                    "data": {"status": "not_found", "http_status": 404},
-                }
-            else:
-                return {
-                    "code": resp.status_code,
-                    "message": f"大模型服务返回异常 (HTTP {resp.status_code}): {resp.text[:200]}",
-                    "data": {"status": "upstream_error", "http_status": resp.status_code},
-                }
-    except httpx.TimeoutException:
-        raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail={"code": 50401, "message": f"请求超时 (15s)，无法连接至 {url}，请检查网络或 Base URL 是否可达"},
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"code": 50201, "message": f"连接大模型接口失败: {str(exc)}"},
-        )
 
 
 @router.post("/models", summary="从上游大模型 API 动态获取可用模型列表")

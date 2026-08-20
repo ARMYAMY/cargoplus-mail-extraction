@@ -3,6 +3,7 @@ import io
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
+from PIL import Image
 
 from app.core.parser.ocr_engine import get_ocr_engine, extract_ocr_from_image, extract_ocr_from_bytes
 import app.core.parser.ocr_engine as ocr_module
@@ -30,6 +31,7 @@ def test_ocr_engine_all_paths(tmp_path):
         [0.05],
     )
     ocr_module._ocr_instance = mock_ocr_engine
+    Image.new("RGB", (200, 200), color="white").save(dummy_img, format="PNG")
 
     txt_img = extract_ocr_from_image(dummy_img)
     assert "CONTAINER NO: MSCU1234567" in txt_img

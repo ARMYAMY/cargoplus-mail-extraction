@@ -3,13 +3,18 @@ from pathlib import Path
 from typing import Any, List, Tuple
 from pypdf import PdfReader
 from app.core.parser.ocr_engine import extract_ocr_from_bytes
+from app.services.vision_service import VisionBudget, VisionService
 
 logger = logging.getLogger(__name__)
 
 
-def parse_pdf(file_path: Path) -> Tuple[str, List[Any], str]:
+def parse_pdf(
+    file_path: Path,
+    vision_budget: VisionBudget | None = None,
+) -> Tuple[str, List[Any], str]:
     """
     Parses a PDF file.
+    Extracts digital text and transcribes embedded images/scans via Vision LLM (with RapidOCR fallback).
     Returns: (text, tables, ocr_text)
     """
     text_parts = []
@@ -19,21 +24,47 @@ def parse_pdf(file_path: Path) -> Tuple[str, List[Any], str]:
     try:
         reader = PdfReader(str(file_path))
         MAX_PAGES = 20
+        if vision_budget is None:
+            from app.config import settings
+
+            vision_budget = VisionBudget(settings.VISION_MAX_IMAGES_PER_TASK)
+
         pages_to_process = reader.pages[:MAX_PAGES]
         for page_idx, page in enumerate(pages_to_process):
             page_text = page.extract_text() or ""
             if page_text.strip():
                 text_parts.append(page_text.strip())
-            else:
-                # If page text is empty (scanned PDF), try extracting images and OCR (up to 3 images per page)
-                for img_idx, img_file in enumerate(page.images[:3]):
-                    try:
-                        img_ocr = extract_ocr_from_bytes(img_file.data)
-                        if img_ocr.strip():
-                            ocr_parts.append(f"[Page {page_idx+1} Image {img_idx+1} OCR]:\n{img_ocr.strip()}")
-                    except Exception as img_err:
-                        logger.warning(f"Error OCR-ing image in PDF {file_path}: {img_err}")
 
+            # Check for embedded images (both on scanned pages and hybrid pages)
+            if hasattr(page, "images") and page.images and not vision_budget.exhausted:
+                for img_idx, img_file in enumerate(page.images):
+                    if vision_budget.exhausted:
+                        logger.info(
+                            "Reached task-wide image transcription limit in PDF %s",
+                            file_path.name,
+                        )
+                        break
+
+                    img_bytes = img_file.data
+                    if VisionService.is_valid_document_image(img_bytes) or not page_text.strip():
+                        if not vision_budget.try_acquire():
+                            break
+                        try:
+                            img_transcription = VisionService.transcribe_image_sync(
+                                img_bytes,
+                                filename_hint=f"{file_path.name}_p{page_idx+1}_img{img_idx+1}",
+                                custom_timeout=vision_budget.request_timeout(),
+                            )
+                            if not img_transcription.strip():
+                                img_transcription = extract_ocr_from_bytes(img_bytes)
+                            if img_transcription.strip():
+                                ocr_parts.append(
+                                    f"[PDF第{page_idx+1}页 单证扫描/内嵌图识别内容]:\n{img_transcription.strip()}"
+                                )
+                        except Exception as img_err:
+                            logger.warning(
+                                f"Error transcribing embedded image in PDF {file_path.name}: {img_err}"
+                            )
 
     except Exception as e:
         logger.error(f"Failed to parse PDF {file_path}: {e}")

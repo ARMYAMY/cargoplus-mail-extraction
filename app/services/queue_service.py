@@ -173,7 +173,10 @@ class TaskQueueManager:
 
 
 class CeleryTaskQueueManager:
-    """Thin API-side adapter for the durable Redis/Celery queue."""
+    """Thin API-side adapter for the durable Redis/Celery queue with in-process local fallback."""
+
+    def __init__(self) -> None:
+        self._fallback_queue: Optional[TaskQueueManager] = None
 
     async def start(self) -> None:
         from app.core.redis_client import get_async_redis
@@ -188,8 +191,13 @@ class CeleryTaskQueueManager:
                 await redis_client.aclose()
         except Exception as e:
             logger.warning(f"Redis not available during queue startup ({e}). Standalone mode active.")
+            if settings.ENVIRONMENT.lower() != "production":
+                self._fallback_queue = TaskQueueManager()
+                await self._fallback_queue.start()
 
     async def stop(self) -> None:
+        if self._fallback_queue:
+            await self._fallback_queue.stop()
         return None
 
     async def enqueue(
@@ -198,21 +206,36 @@ class CeleryTaskQueueManager:
         tenant_id: str,
         tenant_secret: Optional[str] = None,
     ) -> None:
-        del tenant_id, tenant_secret  # Secrets never enter the message broker.
+        if self._fallback_queue:
+            await self._fallback_queue.enqueue(task_id, tenant_id, tenant_secret)
+            return
+
         from app.celery_tasks import process_email_task
 
-        await asyncio.to_thread(
-            process_email_task.apply_async,
-            args=[task_id],
-            queue=settings.CELERY_QUEUE_NAME,
-        )
-        async with AsyncSessionLocal() as db:
-            await db.execute(
-                update(EmailTask)
-                .where(EmailTask.id == task_id, EmailTask.status == "PENDING")
-                .values(last_dispatched_at=datetime.now(timezone.utc))
+        try:
+            await asyncio.to_thread(
+                process_email_task.apply_async,
+                args=[task_id],
+                queue=settings.CELERY_QUEUE_NAME,
             )
-            await db.commit()
+            async with AsyncSessionLocal() as db:
+                await db.execute(
+                    update(EmailTask)
+                    .where(EmailTask.id == task_id, EmailTask.status == "PENDING")
+                    .values(last_dispatched_at=datetime.now(timezone.utc))
+                )
+                await db.commit()
+        except Exception as exc:
+            if settings.ENVIRONMENT.lower() != "production":
+                logger.warning(
+                    f"Celery dispatch failed ({exc}), falling back to in-process worker for task {task_id}"
+                )
+                if not self._fallback_queue:
+                    self._fallback_queue = TaskQueueManager()
+                    await self._fallback_queue.start()
+                await self._fallback_queue.enqueue(task_id, tenant_id, tenant_secret)
+                return
+            raise
 
     async def _recover_uncompleted_tasks(self) -> None:
         from app.celery_tasks import recover_stale_tasks

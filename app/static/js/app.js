@@ -18,12 +18,38 @@ document.addEventListener('DOMContentLoaded', () => {
   const MIN_BENCHMARK_TASKS = 1;
   const MAX_BENCHMARK_TASKS = 100;
 
-  function adminFetch(url, options = {}) {
+  let isRedirectingToLogin = false;
+
+  async function adminFetch(url, options = {}) {
     const headers = new Headers(options.headers || {});
-    if (!headers.has('Authorization') && adminToken) {
-      headers.set('Authorization', `Bearer ${adminToken}`);
+    const currentToken = localStorage.getItem('cargo_admin_token') || '';
+    if (!headers.has('Authorization') && currentToken) {
+      headers.set('Authorization', `Bearer ${currentToken}`);
     }
-    return fetch(url, { ...options, headers });
+
+    try {
+      const response = await fetch(url, { ...options, headers });
+
+      // 1. Sliding Session: Update token if backend returned refreshed token
+      const refreshedToken = response.headers.get('X-Refreshed-Token');
+      if (refreshedToken) {
+        localStorage.setItem('cargo_admin_token', refreshedToken);
+      }
+
+      // 2. Intercept 401/403 session expiration cleanly
+      if ((response.status === 401 || response.status === 403) && !isRedirectingToLogin) {
+        isRedirectingToLogin = true;
+        localStorage.removeItem('cargo_admin_token');
+        showToast('error', '登录会话已过期，请重新登录，正在为您跳转...', '会话已过期');
+        setTimeout(() => {
+          window.location.href = '/login?expired=1';
+        }, 1200);
+      }
+
+      return response;
+    } catch (err) {
+      throw err;
+    }
   }
 
   // Tab Switching
@@ -2160,6 +2186,62 @@ MEAS: 68.000 CBM`;
     }
   };
 
+  function getSelectedVisionModel() {
+    const select = document.getElementById('vision-cfg-model-select');
+    if (!select) return 'qwen3.8-27b';
+    if (select.value === '__custom_vision__') {
+      const custom = document.getElementById('vision-cfg-custom-model')?.value.trim();
+      return custom || 'qwen3.8-27b';
+    }
+    return select.value;
+  }
+
+  function setSelectedVisionModel(modelName) {
+    const select = document.getElementById('vision-cfg-model-select');
+    const customWrapper = document.getElementById('vision-custom-model-wrapper');
+    const customInput = document.getElementById('vision-cfg-custom-model');
+    if (!select) return;
+    let found = false;
+    for (let opt of select.options) {
+      if (opt.value === modelName) {
+        select.value = modelName;
+        found = true;
+        break;
+      }
+    }
+    if (!found && modelName) {
+      select.value = '__custom_vision__';
+      if (customWrapper) customWrapper.style.display = 'block';
+      if (customInput) customInput.value = modelName;
+    } else {
+      if (customWrapper) customWrapper.style.display = 'none';
+    }
+  }
+
+  document.getElementById('vision-cfg-model-select')?.addEventListener('change', function () {
+    const customWrapper = document.getElementById('vision-custom-model-wrapper');
+    const customInput = document.getElementById('vision-cfg-custom-model');
+    if (this.value === '__custom_vision__') {
+      if (customWrapper) customWrapper.style.display = 'block';
+      if (customInput) customInput.focus();
+    } else {
+      if (customWrapper) customWrapper.style.display = 'none';
+    }
+  });
+
+  // Toggle vision settings section visibility
+  document.getElementById('vision-cfg-enabled')?.addEventListener('change', function () {
+    const body = document.getElementById('vision-settings-body');
+    const badge = document.getElementById('vision-status-badge');
+    if (body) {
+      body.style.display = this.checked ? 'block' : 'none';
+    }
+    if (badge) {
+      badge.textContent = this.checked ? '已启用' : '已禁用';
+      badge.className = this.checked ? 'badge badge-success' : 'badge badge-secondary';
+    }
+  });
+
   async function loadLLMConfig() {
     try {
       const res = await adminFetch('/admin/llm-config');
@@ -2189,8 +2271,27 @@ MEAS: 68.000 CBM`;
       }
       if (timeoutInput) timeoutInput.value = data.timeout_seconds || 60;
 
+      // Vision model fields
+      const visionEnabledCb = document.getElementById('vision-cfg-enabled');
+      const visionSettingsBody = document.getElementById('vision-settings-body');
+      const visionStatusBadge = document.getElementById('vision-status-badge');
+      const visionMaxImagesInput = document.getElementById('vision-cfg-max-images');
+
+      if (visionEnabledCb) {
+        visionEnabledCb.checked = !!data.vision_enabled;
+        if (visionSettingsBody) {
+          visionSettingsBody.style.display = data.vision_enabled ? 'block' : 'none';
+        }
+        if (visionStatusBadge) {
+          visionStatusBadge.textContent = data.vision_enabled ? '已启用' : '已禁用';
+          visionStatusBadge.className = data.vision_enabled ? 'badge badge-success' : 'badge badge-secondary';
+        }
+      }
+      setSelectedVisionModel(data.vision_model || 'qwen3.8-27b');
+      if (visionMaxImagesInput) visionMaxImagesInput.value = data.vision_max_images_per_task || 5;
+
       // Always ensure editable
-      [baseUrlInput, apiKeyInput, modelSelect, timeoutInput].forEach((input) => {
+      [baseUrlInput, apiKeyInput, modelSelect, timeoutInput, visionMaxImagesInput].forEach((input) => {
         if (input) input.disabled = false;
       });
       if (saveButton) saveButton.disabled = false;
@@ -2228,6 +2329,10 @@ MEAS: 68.000 CBM`;
       return;
     }
 
+    const visionEnabled = !!document.getElementById('vision-cfg-enabled')?.checked;
+    const visionModel = getSelectedVisionModel();
+    const visionMaxImages = parseInt(document.getElementById('vision-cfg-max-images')?.value) || 5;
+
     const btnSave = document.getElementById('btn-save-llm-config');
     if (btnSave) {
       btnSave.disabled = true;
@@ -2239,6 +2344,9 @@ MEAS: 68.000 CBM`;
         base_url: baseUrl,
         model: model,
         timeout_seconds: timeout,
+        vision_enabled: visionEnabled,
+        vision_model: visionModel,
+        vision_max_images_per_task: visionMaxImages,
       };
       if (apiKey) {
         payload.api_key = apiKey;
@@ -2252,7 +2360,7 @@ MEAS: 68.000 CBM`;
 
       if (res.ok) {
         const updated = await res.json();
-        showToast('success', `🎉 大模型配置已成功保存并生效！当前模型: ${updated.model}`);
+        showToast('success', `🎉 大模型与多模态配置已成功保存并生效！主模型: ${updated.model}, 视觉模型: ${updated.vision_model}`);
         const maskedKeyEl = document.getElementById('llm-cfg-masked-key');
         if (maskedKeyEl) maskedKeyEl.textContent = updated.api_key_masked || '未配置';
         const apiKeyInput = document.getElementById('llm-cfg-api-key');
@@ -2264,6 +2372,11 @@ MEAS: 68.000 CBM`;
         if (statusBadge) {
           statusBadge.textContent = updated.is_configured ? '已就绪 (已配置)' : '未配置 API Key';
           statusBadge.className = updated.is_configured ? 'badge badge-success' : 'badge badge-warning';
+        }
+        const visionStatusBadge = document.getElementById('vision-status-badge');
+        if (visionStatusBadge) {
+          visionStatusBadge.textContent = updated.vision_enabled ? '已启用' : '已禁用';
+          visionStatusBadge.className = updated.vision_enabled ? 'badge badge-success' : 'badge badge-secondary';
         }
       } else {
         const err = await res.json().catch(() => ({}));
@@ -2283,6 +2396,8 @@ MEAS: 68.000 CBM`;
     const baseUrl = document.getElementById('llm-cfg-base-url')?.value.trim();
     const apiKey = document.getElementById('llm-cfg-api-key')?.value.trim();
     const model = getSelectedModel();
+    const visionEnabled = !!document.getElementById('vision-cfg-enabled')?.checked;
+    const visionModel = getSelectedVisionModel();
 
     const btnTest = document.getElementById('btn-test-llm-connection');
     const labelSpan = document.getElementById('btn-test-llm-label');
@@ -2291,7 +2406,7 @@ MEAS: 68.000 CBM`;
     const detailEl = document.getElementById('llm-test-result-detail');
 
     if (btnTest) btnTest.disabled = true;
-    if (labelSpan) labelSpan.textContent = '⚡ 正在探测连接...';
+    if (labelSpan) labelSpan.textContent = '正在探测连通性...';
     if (resultBox) resultBox.style.display = 'none';
 
     try {
@@ -2302,6 +2417,8 @@ MEAS: 68.000 CBM`;
           base_url: baseUrl || undefined,
           api_key: apiKey || undefined,
           model: model || undefined,
+          vision_enabled: visionEnabled,
+          vision_model: visionModel || undefined,
         }),
       });
 
@@ -2309,31 +2426,55 @@ MEAS: 68.000 CBM`;
       if (resultBox) resultBox.style.display = 'block';
 
       if (res.ok && data.code === 0) {
-        showToast('success', data.message);
+        showToast('success', '模型连通性测试通过');
         if (resultBox) {
           resultBox.style.background = 'rgba(16, 185, 129, 0.12)';
           resultBox.style.borderColor = 'rgba(16, 185, 129, 0.4)';
         }
         if (titleEl) {
           titleEl.style.color = '#34d399';
-          titleEl.textContent = '✅ ' + data.message;
+          titleEl.textContent = '连通性测试全部通过';
         }
         if (detailEl) {
-          detailEl.textContent = `目标模型: ${data.data.model} | 往返耗时: ${data.data.latency_ms}ms | 响应预览: "${data.data.response_preview}"`;
+          const m = data.data?.main_model || {};
+          const v = data.data?.vision_model || {};
+          const safe = (value) => escapeHtml(String(value ?? ''));
+          let html = `<div style="display:flex; flex-direction:column; gap:6px; font-size:0.84rem;">`;
+          html += `<div><strong>主抽取模型 [${safe(m.model || model)}]</strong>: <span style="color:#34d399;">正常</span> (耗时: ${safe(m.latency_ms || 0)}ms) - 响应预览: "${safe(m.preview || 'OK')}"</div>`;
+          if (visionEnabled && v.model) {
+            html += `<div><strong>视觉识别模型 [${safe(v.model || visionModel)}]</strong>: <span style="color:#34d399;">正常</span> (耗时: ${safe(v.latency_ms || 0)}ms) - 响应预览: "${safe(v.preview || 'OK')}"</div>`;
+          } else {
+            html += `<div><strong>视觉识别模型</strong>: <span style="color:var(--text-muted);">未启用 (已跳过)</span></div>`;
+          }
+          html += `</div>`;
+          detailEl.innerHTML = html;
         }
       } else {
         const errMsg = data.message || (data.detail?.message || data.detail || '探测失败');
-        showToast('error', errMsg);
+        showToast('warning', errMsg);
         if (resultBox) {
           resultBox.style.background = 'rgba(239, 68, 68, 0.12)';
           resultBox.style.borderColor = 'rgba(239, 68, 68, 0.4)';
         }
         if (titleEl) {
           titleEl.style.color = '#f87171';
-          titleEl.textContent = '❌ 连接失败: ' + errMsg;
+          titleEl.textContent = '测试结果: ' + errMsg;
         }
         if (detailEl) {
-          detailEl.textContent = `状态码: ${data.data?.http_status || res.status} | 详情: ${JSON.stringify(data.data || data.detail || {})}`;
+          const m = data.data?.main_model || {};
+          const v = data.data?.vision_model || {};
+          const safe = (value) => escapeHtml(String(value ?? ''));
+          let html = `<div style="display:flex; flex-direction:column; gap:6px; font-size:0.84rem;">`;
+          if (m.model) {
+            const mOk = m.status === 'success';
+            html += `<div><strong>主抽取模型 [${safe(m.model)}]</strong>: ${mOk ? '<span style="color:#34d399;">正常 (' + safe(m.latency_ms) + 'ms)</span>' : '<span style="color:#f87171;">失败: ' + safe(m.error || '错误') + '</span>'}</div>`;
+          }
+          if (v && v.model) {
+            const vOk = v.status === 'success';
+            html += `<div><strong>视觉识别模型 [${safe(v.model)}]</strong>: ${vOk ? '<span style="color:#34d399;">正常 (' + safe(v.latency_ms) + 'ms)</span>' : '<span style="color:#f87171;">失败: ' + safe(v.error || '错误') + '</span>'}</div>`;
+          }
+          html += `</div>`;
+          detailEl.innerHTML = html;
         }
       }
     } catch (err) {
@@ -2345,11 +2486,11 @@ MEAS: 68.000 CBM`;
       }
       if (titleEl) {
         titleEl.style.color = '#f87171';
-        titleEl.textContent = '❌ 请求异常: ' + err.message;
+        titleEl.textContent = '请求异常: ' + err.message;
       }
     } finally {
       if (btnTest) btnTest.disabled = false;
-      if (labelSpan) labelSpan.textContent = '⚡ 测试连通性';
+      if (labelSpan) labelSpan.textContent = '测试连通性';
     }
   }
 
@@ -2359,9 +2500,10 @@ MEAS: 68.000 CBM`;
     const btnFetch = document.getElementById('btn-fetch-remote-models');
     const labelSpan = document.getElementById('btn-fetch-models-label');
     const modelSelect = document.getElementById('llm-cfg-model');
+    const visionSelect = document.getElementById('vision-cfg-model-select');
 
     if (btnFetch) btnFetch.disabled = true;
-    if (labelSpan) labelSpan.textContent = '⏳ 拉取中...';
+    if (labelSpan) labelSpan.textContent = '拉取中...';
 
     try {
       const res = await adminFetch('/admin/llm-config/models', {
@@ -2376,8 +2518,10 @@ MEAS: 68.000 CBM`;
       const data = await res.json();
       if (res.ok && data.code === 0 && data.data && Array.isArray(data.data.models) && data.data.models.length > 0) {
         const models = data.data.models;
-        const currentVal = getSelectedModel();
+        const currentMainVal = getSelectedModel();
+        const currentVisionVal = getSelectedVisionModel();
 
+        // 1. Populate Main Model Dropdown
         if (modelSelect) {
           modelSelect.innerHTML = '';
           models.forEach((m) => {
@@ -2388,14 +2532,33 @@ MEAS: 68.000 CBM`;
           });
           const customOpt = document.createElement('option');
           customOpt.value = '__custom__';
-          customOpt.textContent = '✏️ 手动输入其他自定义模型...';
+          customOpt.textContent = '手动输入其他自定义模型...';
           modelSelect.appendChild(customOpt);
 
-          setSelectedModel(currentVal);
+          setSelectedModel(currentMainVal);
+        }
+
+        // 2. Populate Vision Model Dropdown (Shares models from API)
+        if (visionSelect) {
+          visionSelect.innerHTML = '';
+          models.forEach((m) => {
+            const opt = document.createElement('option');
+            opt.value = m;
+            opt.textContent = (m === 'qwen3.8-27b') ? `${m} (推荐)` : m;
+            visionSelect.appendChild(opt);
+          });
+          const customOpt = document.createElement('option');
+          customOpt.value = '__custom_vision__';
+          customOpt.textContent = '手动输入其他视觉模型...';
+          visionSelect.appendChild(customOpt);
+
+          // If no previous vision selection or default, prefer qwen3.8-27b if present
+          const targetVision = currentVisionVal || (models.includes('qwen3.8-27b') ? 'qwen3.8-27b' : models[0]);
+          setSelectedVisionModel(targetVision);
         }
 
         if (!isAuto) {
-          showToast('success', `🎉 成功从 API 动态获取到 ${models.length} 个可用模型！`);
+          showToast('success', `成功从 API 获取到 ${models.length} 个可用模型，已同步更新选项`);
         }
       } else {
         if (!isAuto) {
@@ -2409,7 +2572,7 @@ MEAS: 68.000 CBM`;
       }
     } finally {
       if (btnFetch) btnFetch.disabled = false;
-      if (labelSpan) labelSpan.textContent = '🔄 从 API 获取模型';
+      if (labelSpan) labelSpan.textContent = '从 API 获取模型';
     }
   }
 
@@ -2420,10 +2583,12 @@ MEAS: 68.000 CBM`;
 
     if (input.type === 'password') {
       input.type = 'text';
-      btn.textContent = '🙈 隐藏';
+      btn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
+      btn.title = '隐藏密钥';
     } else {
       input.type = 'password';
-      btn.textContent = '👁️ 显示';
+      btn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+      btn.title = '显示密钥';
     }
   }
 

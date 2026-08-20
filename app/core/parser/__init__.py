@@ -9,6 +9,7 @@ from app.core.parser.excel_parser import parse_excel
 from app.core.parser.word_parser import parse_word
 from app.core.parser.doc_parser import DocParseError, parse_doc
 from app.core.parser.ocr_engine import extract_ocr_from_image
+from app.services.vision_service import VisionBudget
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,10 @@ def compress_text_content(text: str, max_chars: int = 8000) -> str:
     return compressed[:max_chars]
 
 
-def parse_single_file(file_path: Path) -> AttachmentInput:
+def parse_single_file(
+    file_path: Path,
+    vision_budget: VisionBudget | None = None,
+) -> AttachmentInput:
     """Parses an individual file and returns an AttachmentInput structure."""
     ext = file_path.suffix.lower()
     filename = file_path.name
@@ -67,19 +71,19 @@ def parse_single_file(file_path: Path) -> AttachmentInput:
     try:
         if ext == ".pdf":
             content_type = "application/pdf"
-            text, tables, ocr_text = parse_pdf(file_path)
+            text, tables, ocr_text = parse_pdf(file_path, vision_budget)
         elif ext == ".xlsx":
             content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             text, tables, ocr_text = parse_excel(file_path)
         elif ext == ".docx":
             content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            text, tables, ocr_text = parse_word(file_path)
+            text, tables, ocr_text = parse_word(file_path, vision_budget)
         elif ext == ".doc":
             content_type = "application/msword"
-            text, tables, ocr_text = parse_doc(file_path)
+            text, tables, ocr_text = parse_doc(file_path, vision_budget)
         elif ext in IMAGE_EXTENSIONS:
             content_type = f"image/{ext.lstrip('.')}"
-            ocr_text = extract_ocr_from_image(file_path)
+            ocr_text = extract_ocr_from_image(file_path, vision_budget)
         elif ext in {".txt", ".csv", ".json", ".md"}:
             content_type = "text/plain"
             text = file_path.read_text(encoding="utf-8", errors="replace")
@@ -110,6 +114,7 @@ def process_uploaded_files(
     subject: str = "",
     body: str = "",
     temp_dir: Path = None,
+    vision_budget: VisionBudget | None = None,
 ) -> SkillV3InputPayload:
     """
     Processes uploaded files (which might include an .eml email file and/or various attachments),
@@ -118,6 +123,10 @@ def process_uploaded_files(
     final_subject = subject
     final_body = body
     attachments: List[AttachmentInput] = []
+    if vision_budget is None:
+        from app.config import settings
+
+        vision_budget = VisionBudget(settings.VISION_MAX_IMAGES_PER_TASK)
 
     for file_path in file_paths:
         ext = file_path.suffix.lower()
@@ -132,9 +141,9 @@ def process_uploaded_files(
 
             # Parse each extracted attachment
             for att_p in extracted_att_paths:
-                attachments.append(parse_single_file(att_p))
+                attachments.append(parse_single_file(att_p, vision_budget))
         else:
-            attachments.append(parse_single_file(file_path))
+            attachments.append(parse_single_file(file_path, vision_budget))
 
     return SkillV3InputPayload(
         mail_subject=final_subject,

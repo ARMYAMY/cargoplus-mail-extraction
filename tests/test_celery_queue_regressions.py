@@ -237,3 +237,23 @@ async def test_celery_task_queue_manager_adapter():
     with patch("redis.Redis.from_url", return_value=mock_sync_err):
         assert mgr.queue_size == -1
         assert mgr.active_tenants == {}
+
+
+@pytest.mark.asyncio
+async def test_celery_dispatch_failure_keeps_fallback_context(monkeypatch):
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+    mgr = CeleryTaskQueueManager()
+    fallback = MagicMock(spec=TaskQueueManager)
+    fallback.start = AsyncMock()
+    fallback.enqueue = AsyncMock()
+
+    with (
+        patch("app.celery_tasks.process_email_task.apply_async", side_effect=RuntimeError("broker down")),
+        patch("app.services.queue_service.TaskQueueManager", return_value=fallback),
+    ):
+        await mgr.enqueue("task_fallback", "tenant_fallback", "secret_fallback")
+
+    fallback.start.assert_awaited_once()
+    fallback.enqueue.assert_awaited_once_with(
+        "task_fallback", "tenant_fallback", "secret_fallback"
+    )

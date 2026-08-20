@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from PIL import Image
 from starlette.requests import Request
 
 from app.main import app, seed_initial_demo_tenant, lifespan
@@ -124,7 +125,7 @@ def test_ocr_engine_mocked_results(tmp_path):
 
     with patch("app.core.parser.ocr_engine.get_ocr_engine", return_value=mock_ocr):
         dummy_img = tmp_path / "ocr_test.jpg"
-        dummy_img.write_bytes(b"\xff\xd8\xff\xe0 dummy jpeg")
+        Image.new("RGB", (200, 200), color="white").save(dummy_img, format="JPEG")
 
         text_img = extract_ocr_from_image(dummy_img)
         assert "CARGO CONTAINER OCR LINE 1" in text_img

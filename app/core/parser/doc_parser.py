@@ -537,7 +537,7 @@ def _extract_xml_html_text(data: bytes) -> str:
     return text
 
 
-def parse_doc(file_path: Path) -> Tuple[str, List[Any], str]:
+def parse_doc(file_path: Path, vision_budget=None) -> Tuple[str, List[Any], str]:
     """Parse a legacy Word 97-2003, RTF, or Word HTML document safely."""
     try:
         file_size = file_path.stat().st_size
@@ -559,7 +559,7 @@ def parse_doc(file_path: Path) -> Tuple[str, List[Any], str]:
         if normalized_prefix.startswith(b"PK\x03\x04"):
             from app.core.parser.word_parser import parse_word
 
-            text, tables, error_text = parse_word(file_path)
+            text, tables, error_text = parse_word(file_path, vision_budget)
             if error_text:
                 raise DocParseError(error_text)
             if not text and not tables:

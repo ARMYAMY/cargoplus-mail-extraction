@@ -1,13 +1,16 @@
+import base64
+import io
 import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
 from httpx import ASGITransport, AsyncClient, TimeoutException
+from PIL import Image
 from sqlalchemy import select
 from app.config import settings
 from app.database import AsyncSessionLocal, init_db
 from app.main import app, load_dynamic_system_config
 from app.models.system import SystemConfig
-from app.api.admin.llm_config import _mask_api_key, _validate_base_url
+from app.api.admin.llm_config import VISION_PROBE_DATA_URL, _mask_api_key, _validate_base_url
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -235,6 +238,47 @@ async def test_test_llm_connection_all_branches():
                 headers=headers,
             )
             assert res_err.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_vision_connection_probe_contains_an_image():
+    probe_bytes = base64.b64decode(VISION_PROBE_DATA_URL.split(",", 1)[1])
+    with Image.open(io.BytesIO(probe_bytes)) as probe_image:
+        probe_image.load()
+        assert probe_image.size == (2, 2)
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"choices": [{"message": {"content": "OK"}}]}
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_resp
+    mock_ctx = MagicMock()
+    mock_ctx.__aenter__.return_value = mock_client
+    mock_ctx.__aexit__.return_value = None
+
+    with patch("app.api.admin.llm_config.httpx.AsyncClient", return_value=mock_ctx):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/admin/llm-config/test",
+                json={
+                    "base_url": "https://api.test.com/v1",
+                    "api_key": "valid-key",
+                    "model": "text-model",
+                    "vision_enabled": True,
+                    "vision_model": "vision-model",
+                },
+                headers={"X-Admin-Secret": settings.ADMIN_SECRET_KEY},
+            )
+
+    assert response.status_code == 200
+    assert mock_client.post.await_count == 2
+    vision_payload = mock_client.post.await_args_list[1].kwargs["json"]
+    vision_content = vision_payload["messages"][0]["content"]
+    assert isinstance(vision_content, list)
+    assert vision_content[1]["type"] == "image_url"
+    assert vision_content[1]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
 @pytest.mark.asyncio
