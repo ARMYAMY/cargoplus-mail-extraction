@@ -276,6 +276,12 @@ async def extract_async_upload(
         upload_root = settings.uploads_path.resolve()
         for upload in files:
             raw_name = Path(upload.filename or "file").name
+            extension = Path(raw_name).suffix.lower()
+            file_limit = (
+                settings.MAX_LEGACY_DOC_FILE_SIZE
+                if extension == ".doc"
+                else settings.MAX_UPLOAD_FILE_SIZE
+            )
             safe_base_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", raw_name)[:180] or "file"
             safe_filename = f"{task_id_prefix}_{uuid.uuid4().hex[:12]}_{safe_base_name}"
             dest_path = (upload_root / safe_filename).resolve()
@@ -292,10 +298,13 @@ async def extract_async_upload(
                             break
                         file_size += len(chunk)
                         total_size += len(chunk)
-                        if file_size > settings.MAX_UPLOAD_FILE_SIZE:
+                        if file_size > file_limit:
                             raise HTTPException(
                                 status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-                                detail={"code": 41301, "message": f"单文件 {raw_name} 超过最大允许大小"},
+                                detail={
+                                    "code": 41301,
+                                    "message": f"单文件 {raw_name} 超过最大允许大小 {file_limit // (1024 * 1024)}MB",
+                                },
                             )
                         if total_size > settings.MAX_UPLOAD_TOTAL_SIZE:
                             raise HTTPException(

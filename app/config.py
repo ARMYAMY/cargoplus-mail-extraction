@@ -85,6 +85,7 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = str(BASE_DIR / "data" / "uploads")
     MAX_UPLOAD_FILES: int = Field(default=10, ge=1, le=50)
     MAX_UPLOAD_FILE_SIZE: int = Field(default=50 * 1024 * 1024, ge=1024, le=200 * 1024 * 1024)
+    MAX_LEGACY_DOC_FILE_SIZE: int = Field(default=20 * 1024 * 1024, ge=1024, le=50 * 1024 * 1024)
     MAX_UPLOAD_TOTAL_SIZE: int = Field(default=100 * 1024 * 1024, ge=1024, le=500 * 1024 * 1024)
 
     # Webhook
@@ -136,6 +137,14 @@ class Settings(BaseSettings):
             if not secret_value:
                 raise ValueError(f"{field_name}_FILE must not be empty")
             setattr(self, field_name, secret_value)
+        return self
+
+    @model_validator(mode="after")
+    def validate_upload_limits(self) -> "Settings":
+        if self.MAX_LEGACY_DOC_FILE_SIZE > self.MAX_UPLOAD_FILE_SIZE:
+            raise ValueError("MAX_LEGACY_DOC_FILE_SIZE must not exceed MAX_UPLOAD_FILE_SIZE")
+        if self.MAX_UPLOAD_FILE_SIZE > self.MAX_UPLOAD_TOTAL_SIZE:
+            raise ValueError("MAX_UPLOAD_FILE_SIZE must not exceed MAX_UPLOAD_TOTAL_SIZE")
         return self
 
     @property
