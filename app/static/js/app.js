@@ -79,6 +79,10 @@ document.addEventListener('DOMContentLoaded', () => {
       title: '大模型服务配置',
       subtitle: '配置上游大模型 API 接口地址 (Base URL)、认证密钥 (API Key) 与模型参数',
     },
+    feedback_optimization: {
+      title: '反馈审核与模型自进化优化',
+      subtitle: '审核租户纠错反馈并自动退款冲正，维护动态 Few-Shot 样本库，执行全量金标回归评测与版本发布',
+    },
   };
 
   navItems.forEach((btn) => {
@@ -104,6 +108,11 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       if (tab === 'workbench') populateWorkbenchKeySelect();
       if (tab === 'llm_config') loadLLMConfig();
+      if (tab === 'feedback_optimization') {
+        loadAdminFeedbacks();
+        loadAdminFewShots();
+        loadAdminVersions();
+      }
     });
   });
 
@@ -117,6 +126,11 @@ document.addEventListener('DOMContentLoaded', () => {
       loadBillingTable();
     }
     if (activeTab === 'llm_config') loadLLMConfig();
+    if (activeTab === 'feedback_optimization') {
+      loadAdminFeedbacks();
+      loadAdminFewShots();
+      loadAdminVersions();
+    }
   });
 
 
@@ -2626,6 +2640,477 @@ MEAS: 68.000 CBM`;
   document.getElementById('btn-test-llm-connection')?.addEventListener('click', testLLMConnection);
   document.getElementById('btn-fetch-remote-models')?.addEventListener('click', () => fetchRemoteModels(false));
   document.getElementById('btn-toggle-llm-key-visibility')?.addEventListener('click', toggleLLMKeyVisibility);
+
+  // =========================================================================
+  // 6. Feedback Audit, Few-Shot Management & Version Release Logic
+  // =========================================================================
+  let currentAuditFeedbackId = null;
+  let currentAuditFeedbackData = null;
+
+  window.switchFeedbackSubTab = function(subName) {
+    const btnAudit = document.getElementById('btn-subtab-fb-audit');
+    const btnFewShot = document.getElementById('btn-subtab-fb-fewshot');
+    const btnRelease = document.getElementById('btn-subtab-fb-release');
+
+    const viewAudit = document.getElementById('subview-fb-audit');
+    const viewFewShot = document.getElementById('subview-fb-fewshot');
+    const viewRelease = document.getElementById('subview-fb-release');
+
+    [btnAudit, btnFewShot, btnRelease].forEach(b => b && b.classList.remove('active'));
+    [viewAudit, viewFewShot, viewRelease].forEach(v => v && (v.style.display = 'none'));
+
+    if (subName === 'fewshot') {
+      if (btnFewShot) btnFewShot.classList.add('active');
+      if (viewFewShot) viewFewShot.style.display = 'block';
+      loadAdminFewShots();
+    } else if (subName === 'release') {
+      if (btnRelease) btnRelease.classList.add('active');
+      if (viewRelease) viewRelease.style.display = 'block';
+      loadAdminVersions();
+    } else {
+      if (btnAudit) btnAudit.classList.add('active');
+      if (viewAudit) viewAudit.style.display = 'block';
+      loadAdminFeedbacks();
+    }
+  };
+
+  window.loadAdminFeedbacks = async function() {
+    const tbody = document.querySelector('#table-admin-feedbacks tbody');
+    if (!tbody) return;
+
+    const statusFilter = document.getElementById('filter-fb-status')?.value || '';
+    let url = '/admin/feedbacks?page=1&page_size=50';
+    if (statusFilter) url += `&status=${statusFilter}`;
+
+    try {
+      const res = await adminFetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const payload = data.data || {};
+      const items = payload.items || [];
+
+      // Update counters
+      if (document.getElementById('stat-fb-pending')) document.getElementById('stat-fb-pending').textContent = payload.pending_count || 0;
+      if (document.getElementById('stat-fb-accepted')) document.getElementById('stat-fb-accepted').textContent = payload.accepted_count || 0;
+      if (document.getElementById('stat-fb-resolved')) document.getElementById('stat-fb-resolved').textContent = payload.resolved_count || 0;
+
+      if (items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-8">暂无符合条件的纠错反馈工单</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = items.map(it => {
+        let statusBadge = '<span class="badge badge-warning">待审核</span>';
+        if (it.status === 'ACCEPTED') statusBadge = '<span class="badge badge-success">已采纳/退款</span>';
+        else if (it.status === 'RESOLVED') statusBadge = `<span class="badge" style="background:#0284c7; color:#fff;">已解决 (${escapeHtml(it.resolved_version || '最新')})</span>`;
+        else if (it.status === 'REJECTED') statusBadge = '<span class="badge badge-danger">已驳回</span>';
+
+        const refundText = it.is_refunded ? `<strong class="text-danger">已退 ¥${parseFloat(it.refund_amount).toFixed(2)}</strong>` : '<span class="text-muted">未退费</span>';
+
+        return `
+          <tr>
+            <td class="font-mono" style="font-size:0.8rem;"><strong>${it.id}</strong></td>
+            <td><strong>${escapeHtml(it.tenant_name || it.tenant_id)}</strong></td>
+            <td class="font-mono" style="font-size:0.8rem;"><a href="javascript:void(0)" onclick="viewTaskDetailAdmin('${it.task_id}')">${it.task_id}</a></td>
+            <td><span class="badge badge-info">${it.diff_fields_count} 处变更</span></td>
+            <td>${statusBadge}</td>
+            <td>${refundText}</td>
+            <td style="max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(it.notes || '-')}">${escapeHtml(it.notes || '-')}</td>
+            <td class="text-muted" style="font-size:0.75rem;">${formatDate(it.created_at)}</td>
+            <td>
+              <button class="btn btn-sm btn-primary" onclick="openFeedbackDiffModal('${it.id}')">
+                <span>Diff 审核</span>
+              </button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan="9" class="text-center text-danger py-8">加载工单失败: ${escapeHtml(err.message)}</td></tr>`;
+    }
+  };
+
+  document.getElementById('filter-fb-status')?.addEventListener('change', loadAdminFeedbacks);
+
+  window.openFeedbackDiffModal = async function(fbId) {
+    currentAuditFeedbackId = fbId;
+    try {
+      const res = await adminFetch(`/admin/feedbacks/${fbId}`);
+      if (!res.ok) throw new Error('查询工单详情失败');
+      const data = await res.json();
+      const fb = data.data;
+      currentAuditFeedbackData = fb;
+
+      document.getElementById('fd-id').textContent = fb.id;
+      document.getElementById('fd-tenant').textContent = `${fb.tenant_name} (${fb.tenant_id})`;
+      document.getElementById('fd-notes').textContent = fb.notes || '客户未填写备注';
+
+      let statusBadge = '<span class="badge badge-warning">待审核 (PENDING)</span>';
+      if (fb.status === 'ACCEPTED') statusBadge = '<span class="badge badge-success">已采纳/已退费</span>';
+      else if (fb.status === 'RESOLVED') statusBadge = `<span class="badge" style="background:#0284c7; color:#fff;">已发布解决 (${fb.resolved_version})</span>`;
+      else if (fb.status === 'REJECTED') statusBadge = '<span class="badge badge-danger">已驳回 (REJECTED)</span>';
+      document.getElementById('fd-status-badge').innerHTML = statusBadge;
+
+      const diffSet = new Set(fb.diff_fields || []);
+
+      // Populate Original Table
+      const tbodyOrig = document.querySelector('#table-fd-original tbody');
+      const origObj = fb.original_result || {};
+      tbodyOrig.innerHTML = Object.entries(origObj).map(([k, v]) => {
+        const isDiff = diffSet.has(k);
+        const valStr = typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v || '');
+        return `
+          <tr style="${isDiff ? 'background: rgba(239, 68, 68, 0.18); font-weight:600;' : ''}">
+            <td style="color:${isDiff ? '#f87171' : 'var(--text-secondary)'}; font-family:var(--font-mono); width:35%;">${escapeHtml(k)}</td>
+            <td style="color:${isDiff ? '#fff' : 'var(--text-muted)'}; word-break:break-all;">${escapeHtml(valStr)}</td>
+          </tr>
+        `;
+      }).join('');
+
+      // Populate Corrected Table
+      const tbodyCorr = document.querySelector('#table-fd-corrected tbody');
+      const corrObj = fb.corrected_result || {};
+      tbodyCorr.innerHTML = Object.entries(corrObj).map(([k, v]) => {
+        const isDiff = diffSet.has(k);
+        const valStr = typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v || '');
+        return `
+          <tr style="${isDiff ? 'background: rgba(16, 185, 129, 0.18); font-weight:600;' : ''}">
+            <td style="color:${isDiff ? '#34d399' : 'var(--text-secondary)'}; font-family:var(--font-mono); width:35%;">${escapeHtml(k)}</td>
+            <td style="color:${isDiff ? '#fff' : 'var(--text-muted)'}; word-break:break-all;">${escapeHtml(valStr)}</td>
+          </tr>
+        `;
+      }).join('');
+
+      // Set audit action fields
+      document.getElementById('fd-error-category').value = fb.error_category || 'PROMPT_LLM';
+      document.getElementById('fd-review-comment').value = fb.review_comment || '';
+
+      const actionPanel = document.getElementById('fd-audit-action-panel');
+      const btnReject = document.getElementById('btn-fd-reject');
+      const btnAccept = document.getElementById('btn-fd-accept');
+
+      if (fb.status === 'RESOLVED' || fb.status === 'ACCEPTED') {
+        if (actionPanel) actionPanel.style.opacity = '0.7';
+        if (btnAccept) btnAccept.disabled = true;
+      } else {
+        if (actionPanel) actionPanel.style.opacity = '1';
+        if (btnAccept) btnAccept.disabled = false;
+        if (btnReject) btnReject.disabled = false;
+      }
+
+      openModal('modal-feedback-diff');
+    } catch (err) {
+      showToast('error', `加载 Diff 详情失败: ${err.message}`);
+    }
+  };
+
+  window.doAuditFeedback = async function(actionStatus) {
+    if (!currentAuditFeedbackId) return;
+
+    const errorCat = document.getElementById('fd-error-category')?.value || 'UNSPECIFIED';
+    const comment = document.getElementById('fd-review-comment')?.value.trim() || '';
+    const autoRefund = document.getElementById('fd-auto-refund')?.checked ?? true;
+    const createFewShot = document.getElementById('fd-create-fewshot')?.checked ?? true;
+
+    const actionUrl = actionStatus === 'ACCEPTED'
+      ? `/admin/feedbacks/${currentAuditFeedbackId}/accept`
+      : `/admin/feedbacks/${currentAuditFeedbackId}/reject`;
+
+    try {
+      const res = await adminFetch(actionUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: actionStatus,
+          error_category: errorCat,
+          review_comment: comment,
+          auto_refund: autoRefund,
+          create_few_shot: createFewShot,
+          create_benchmark: true,
+        }),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || `HTTP ${res.status}`);
+      }
+
+      const resData = await res.json();
+      showToast('success', resData.message || '审核处理成功！');
+      closeModal('modal-feedback-diff');
+      loadAdminFeedbacks();
+    } catch (err) {
+      showToast('error', `审核操作失败: ${err.message}`);
+    }
+  };
+
+  // -------------------------------------------------------------
+  // Few-Shot CRUD
+  // -------------------------------------------------------------
+  window.loadAdminFewShots = async function() {
+    const tbody = document.querySelector('#table-admin-fewshots tbody');
+    if (!tbody) return;
+
+    try {
+      const res = await adminFetch('/admin/few-shots');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const items = data.data || [];
+
+      if (items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-8">暂无动态 Few-Shot 样本，点击右上角新增或通过审核采纳自动生成</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = items.map(it => `
+        <tr>
+          <td><strong>${escapeHtml(it.title)}</strong></td>
+          <td><span class="badge badge-info font-mono">${escapeHtml(it.doc_type)}</span></td>
+          <td><strong class="font-mono">${it.priority}</strong></td>
+          <td>
+            <button type="button" class="btn btn-xs ${it.is_active ? 'btn-success' : 'btn-secondary'}" onclick="toggleFewShotActive('${it.id}', ${it.is_active})">
+              ${it.is_active ? '已启用 (注入Prompt)' : '已禁用'}
+            </button>
+          </td>
+          <td style="max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--font-mono); font-size:0.75rem;">${escapeHtml(it.input_excerpt)}</td>
+          <td class="text-muted" style="font-size:0.75rem;">${formatDate(it.updated_at || it.created_at)}</td>
+          <td>
+            <button class="btn btn-xs btn-danger" onclick="deleteFewShot('${it.id}')">删除</button>
+          </td>
+        </tr>
+      `).join('');
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan="7" class="text-center text-danger py-8">加载 Few-Shot 失败: ${escapeHtml(err.message)}</td></tr>`;
+    }
+  };
+
+  window.openFewShotEditModal = function() {
+    document.getElementById('fse-id').value = '';
+    document.getElementById('fse-name').value = '';
+    document.getElementById('fse-doctype').value = 'GENERAL';
+    document.getElementById('fse-priority').value = '20';
+    document.getElementById('fse-input').value = '';
+    document.getElementById('fse-output').value = '{\n  "PortOfDischarge": "HAMBURG",\n  "BookingNo": "BK123456"\n}';
+    document.getElementById('fse-active').checked = true;
+    openModal('modal-few-shot-edit');
+  };
+
+  window.saveFewShotExample = async function() {
+    const title = document.getElementById('fse-name').value.trim();
+    const docType = document.getElementById('fse-doctype').value.trim() || 'GENERAL';
+    const priority = parseInt(document.getElementById('fse-priority').value) || 20;
+    const inputExcerpt = document.getElementById('fse-input').value.trim();
+    const outputRaw = document.getElementById('fse-output').value.trim();
+    const isActive = document.getElementById('fse-active').checked;
+
+    if (!title || !inputExcerpt || !outputRaw) {
+      showToast('warning', '请完整填写标题、输入单证片段和期望 JSON');
+      return;
+    }
+
+    let parsedOutput = {};
+    try {
+      parsedOutput = JSON.parse(outputRaw);
+    } catch (e) {
+      showToast('error', '期望标准输出必须为合法的 JSON 格式: ' + e.message);
+      return;
+    }
+
+    try {
+      const res = await adminFetch('/admin/few-shots', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title,
+          doc_type: docType,
+          priority,
+          input_excerpt: inputExcerpt,
+          expected_output: parsedOutput,
+          is_active: isActive,
+        }),
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      showToast('success', 'Few-Shot 样本保存成功，已热加载注入 Prompt！');
+      closeModal('modal-few-shot-edit');
+      loadAdminFewShots();
+    } catch (err) {
+      showToast('error', '保存失败: ' + err.message);
+    }
+  };
+
+  window.toggleFewShotActive = async function(fsId, currentActive) {
+    try {
+      const res = await adminFetch(`/admin/few-shots/${fsId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: !currentActive }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      showToast('success', `示例状态已更新为: ${!currentActive ? '启用' : '禁用'}`);
+      loadAdminFewShots();
+    } catch (err) {
+      showToast('error', '状态切换失败: ' + err.message);
+    }
+  };
+
+  window.deleteFewShot = async function(fsId) {
+    const confirmed = await showConfirmModal({
+      title: '删除 Few-Shot 样本',
+      message: '确定要删除该少样本示例吗？删除后将不再注入大模型上下文。',
+      confirmText: '确认删除',
+      type: 'danger',
+    });
+    if (!confirmed) return;
+
+    try {
+      const res = await adminFetch(`/admin/few-shots/${fsId}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      showToast('success', '示例已删除');
+      loadAdminFewShots();
+    } catch (err) {
+      showToast('error', '删除失败: ' + err.message);
+    }
+  };
+
+  // -------------------------------------------------------------
+  // Regression Evaluation & Version Release
+  // -------------------------------------------------------------
+  window.triggerRegressionEvaluation = async function() {
+    const btn = document.getElementById('btn-run-eval');
+    const label = document.getElementById('btn-run-eval-label');
+    const card = document.getElementById('eval-result-card');
+    const btnRelease = document.getElementById('btn-open-release-modal');
+
+    if (btn) btn.disabled = true;
+    if (label) label.textContent = '评测执行中 (正在并发重跑金标用例)...';
+
+    try {
+      const res = await adminFetch('/admin/evaluation/run', { method: 'POST' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const evalData = data.data || {};
+
+      if (card) card.style.display = 'block';
+      document.getElementById('eval-total-cases').textContent = evalData.total_cases || 0;
+
+      const accEl = document.getElementById('eval-overall-acc');
+      const accVal = evalData.overall_accuracy_percent ?? 100.0;
+      accEl.textContent = `${accVal}%`;
+      accEl.style.color = accVal >= 90 ? '#34d399' : (accVal >= 80 ? '#fbbf24' : '#f87171');
+
+      const regEl = document.getElementById('eval-regressions');
+      const regVal = evalData.critical_regressions_count || 0;
+      regEl.textContent = `${regVal} 个`;
+      regEl.style.color = regVal === 0 ? '#34d399' : '#f87171';
+
+      document.getElementById('eval-duration').textContent = `${evalData.duration_seconds || 0}s`;
+
+      const gateMsg = document.getElementById('eval-release-gate-msg');
+      if (evalData.can_release) {
+        gateMsg.style.background = 'rgba(16, 185, 129, 0.15)';
+        gateMsg.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+        gateMsg.style.color = '#34d399';
+        gateMsg.innerHTML = '✓ 全量金标回归评测通过！未检测到核心关键字段退化，准确率达标，准予发布新版本。';
+        if (btnRelease) btnRelease.disabled = false;
+      } else {
+        gateMsg.style.background = 'rgba(239, 68, 68, 0.15)';
+        gateMsg.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+        gateMsg.style.color = '#f87171';
+        gateMsg.innerHTML = `⚠️ 评测门禁拦截: 检测到 ${regVal} 个核心关键字段回退或综合准确率不足 80%，请先调整少样本/规则后再发布。`;
+        if (btnRelease) btnRelease.disabled = true;
+      }
+
+      showToast('success', '金标回归评测执行完毕！');
+    } catch (err) {
+      showToast('error', '回归评测失败: ' + err.message);
+    } finally {
+      if (btn) btn.disabled = false;
+      if (label) label.textContent = '▶ 运行全量金标回归评测';
+    }
+  };
+
+  window.openVersionReleaseModal = function() {
+    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    document.getElementById('vr-tag').value = `v3.2.${dateStr.slice(4)}`;
+    document.getElementById('vr-changelog').value = '优化大模型抽取规则，注入最新采纳的 Few-Shot 纠错样本，全量金标回归评测通过。';
+    document.getElementById('vr-mark-resolved').checked = true;
+    openModal('modal-version-release');
+  };
+
+  window.doReleaseVersion = async function() {
+    const versionTag = document.getElementById('vr-tag').value.trim();
+    const changelog = document.getElementById('vr-changelog').value.trim();
+    const markResolved = document.getElementById('vr-mark-resolved').checked;
+
+    if (!versionTag) {
+      showToast('warning', '请输入版本号');
+      return;
+    }
+
+    try {
+      const res = await adminFetch('/admin/version/release', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          version_tag: versionTag,
+          changelog,
+          mark_accepted_as_resolved: markResolved,
+        }),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || `HTTP ${res.status}`);
+      }
+
+      const data = await res.json();
+      showToast('success', data.message || '新版本发布成功！');
+      closeModal('modal-version-release');
+      loadAdminVersions();
+      loadAdminFeedbacks();
+    } catch (err) {
+      showToast('error', '版本发布失败: ' + err.message);
+    }
+  };
+
+  window.loadAdminVersions = async function() {
+    const tbody = document.querySelector('#table-admin-versions tbody');
+    if (!tbody) return;
+
+    try {
+      const res = await adminFetch('/admin/versions');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const items = data.data || [];
+
+      if (items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-6">暂无版本发布记录</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = items.map(v => `
+        <tr>
+          <td><strong class="font-mono" style="color:#38bdf8;">${escapeHtml(v.version_tag)}</strong></td>
+          <td><span class="badge badge-success font-mono">${escapeHtml(v.benchmark_score)}</span></td>
+          <td><strong class="font-mono">${v.passed_test_cases}/${v.total_test_cases}</strong></td>
+          <td><span class="badge badge-info">${v.resolved_feedbacks_count} 条工单</span></td>
+          <td style="max-width:260px; font-size:0.8rem; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(v.changelog || '-')}">${escapeHtml(v.changelog || '-')}</td>
+          <td class="text-muted" style="font-size:0.75rem;">${formatDate(v.released_at)}</td>
+        </tr>
+      `).join('');
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan="6" class="text-center text-danger py-6">加载版本历史失败: ${escapeHtml(err.message)}</td></tr>`;
+    }
+  };
+
+  window.viewTaskDetailAdmin = function(taskId) {
+    if (window.viewTaskDetail) {
+      window.viewTaskDetail(taskId);
+    } else {
+      showToast('info', `任务 ID: ${taskId}`);
+    }
+  };
 
 
 

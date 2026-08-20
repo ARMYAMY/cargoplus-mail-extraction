@@ -76,12 +76,14 @@ class SkillRunner:
 
         return "\n\n".join(blocks)
 
-    def build_extract_prompt(self, payload: SkillV3InputPayload) -> str:
+    def build_extract_prompt(self, payload: SkillV3InputPayload, few_shot_snippet: str = "") -> str:
         attachments_text = self.format_attachments_text(payload.attachments)
         prompt = self.extract_prompt_template
         prompt = prompt.replace("{{mail_subject}}", payload.mail_subject or "无主题")
         prompt = prompt.replace("{{mail_body}}", payload.mail_body or "无正文")
         prompt = prompt.replace("{{attachments_text}}", attachments_text)
+        if few_shot_snippet and few_shot_snippet.strip():
+            prompt = prompt + "\n\n" + few_shot_snippet.strip()
         return prompt
 
     def build_validate_prompt(self, raw_json_str: str, error_messages: List[str]) -> str:
@@ -108,34 +110,37 @@ class SkillRunner:
         Invokes LLM API (SenseTime / OpenAI compatible) with temperature=0 and JSON mode.
         """
         model_name = model_override or settings.LLM_MODEL
-        url = f"{settings.LLM_BASE_URL.rstrip('/')}/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-        }
-        if settings.LLM_API_KEY:
-            headers["Authorization"] = f"Bearer {settings.LLM_API_KEY}"
+        base_url = settings.LLM_BASE_URL.rstrip("/")
+        endpoint = f"{base_url}/chat/completions"
+        api_key = settings.LLM_API_KEY.strip()
 
         payload = {
             "model": model_name,
             "messages": [
                 {
-                    "role": "user",
-                    "content": prompt,
-                }
+                    "role": "system",
+                    "content": "You are a specialized cargo mail extraction agent. Always return valid JSON without extra text.",
+                },
+                {"role": "user", "content": prompt},
             ],
             "temperature": settings.LLM_TEMPERATURE,
             "response_format": {"type": "json_object"},
         }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
 
+        # Execute with configured timeout and exponential backoff retries
         last_error = None
         async with httpx.AsyncClient(
-            timeout=settings.LLM_TIMEOUT_SECONDS,
+            timeout=float(settings.LLM_TIMEOUT_SECONDS),
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
         ) as client:
             for attempt in range(settings.LLM_MAX_RETRIES + 1):
                 attempt_started = time.monotonic()
                 try:
-                    resp = await client.post(url, json=payload, headers=headers)
+                    resp = await client.post(endpoint, json=payload, headers=headers)
                     if resp.status_code == 200:
                         data = resp.json()
                         choices = data.get("choices", [])
@@ -186,11 +191,11 @@ class SkillRunner:
 
         raise RuntimeError(f"LLM Extraction failed after {settings.LLM_MAX_RETRIES+1} attempts. Error: {last_error}")
 
-    async def extract_draft_json(self, payload: SkillV3InputPayload) -> Dict[str, Any]:
+    async def extract_draft_json(self, payload: SkillV3InputPayload, few_shot_snippet: str = "") -> Dict[str, Any]:
         """
         Executes Prompt extraction against LLM and parses JSON.
         """
-        prompt = self.build_extract_prompt(payload)
+        prompt = self.build_extract_prompt(payload, few_shot_snippet=few_shot_snippet)
         response_text = await self.call_llm(prompt)
         cleaned_json_str = self._clean_json_response(response_text)
 

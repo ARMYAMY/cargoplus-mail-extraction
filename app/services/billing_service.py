@@ -463,3 +463,90 @@ class BillingService:
             "total_deducted": total_deducted,
             "total_tasks_charged": task_count,
         }
+
+    @staticmethod
+    async def refund_task_deduction(
+        db: AsyncSession,
+        tenant_id: str,
+        task_id: str,
+        operator: str = "ADMIN",
+        reason: str = "反馈采纳退款冲正",
+    ) -> Optional[BillingTransaction]:
+        """
+        Atomically refunds a charged task deduction to tenant balance and records a REFUND transaction.
+        Idempotent: will not double refund if already refunded.
+        """
+        lock = await _get_tenant_lock(tenant_id)
+        async with lock:
+            # 1. Check if already refunded
+            existing_refund_stmt = select(BillingTransaction).where(
+                BillingTransaction.task_id == task_id,
+                BillingTransaction.type == "REFUND",
+            )
+            existing_refund = (await db.execute(existing_refund_stmt)).scalar_one_or_none()
+            if existing_refund:
+                logger.info("Task %s already refunded (tx: %s)", task_id, existing_refund.id)
+                return existing_refund
+
+            # 2. Check task charge status
+            task_stmt = (
+                select(EmailTask)
+                .where(EmailTask.id == task_id, EmailTask.tenant_id == tenant_id)
+                .execution_options(populate_existing=True)
+            )
+            task = (await db.execute(task_stmt)).scalar_one_or_none()
+            if not task:
+                logger.warning("Task %s not found for refund", task_id)
+                return None
+
+            refund_amt = Decimal(str(task.charged_amount or "0.5000"))
+            if refund_amt <= 0:
+                refund_amt = Decimal("0.5000")
+
+            # 3. Atomically increase tenant balance
+            balance_update = await db.execute(
+                update(Tenant)
+                .where(
+                    Tenant.id == tenant_id,
+                    Tenant.balance >= Decimal("0"),
+                    Tenant.balance + refund_amt <= MAX_ACCOUNT_BALANCE,
+                )
+                .values(balance=Tenant.balance + refund_amt)
+                .execution_options(synchronize_session=False)
+            )
+            if balance_update.rowcount != 1:
+                await db.rollback()
+                logger.error("Failed to update tenant %s balance during refund", tenant_id)
+                return None
+
+            tenant = (
+                await db.execute(
+                    select(Tenant)
+                    .where(Tenant.id == tenant_id)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one()
+
+            balance_after = Decimal(str(tenant.balance))
+            balance_before = balance_after - refund_amt
+
+            # Update task
+            task.is_charged = False
+
+            # Create REFUND transaction ledger
+            tx = BillingTransaction(
+                tenant_id=tenant_id,
+                task_id=task_id,
+                type="REFUND",
+                amount=refund_amt,
+                balance_before=balance_before,
+                balance_after=balance_after,
+                description=f"邮件抽取纠错审核通过退款冲正: {reason} (Task: {task_id})",
+                operator=operator,
+            )
+            db.add(tx)
+            await db.commit()
+            await db.refresh(tx)
+            logger.info("Successfully refunded %s to tenant %s for task %s (tx: %s)", refund_amt, tenant_id, task_id, tx.id)
+            return tx
+

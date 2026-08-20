@@ -5,6 +5,7 @@ from app.api.admin.tasks import router as tasks_router
 from app.api.admin.stats import router as stats_router
 from app.api.admin.billing import router as billing_router
 from app.api.admin.llm_config import router as llm_config_router
+from app.api.admin.feedback import router as feedback_router
 
 admin_router = APIRouter()
 admin_router.include_router(tenants_router, tags=["Admin - Tenants"])
@@ -13,4 +14,6 @@ admin_router.include_router(tasks_router, tags=["Admin - Tasks"])
 admin_router.include_router(stats_router, tags=["Admin - Statistics"])
 admin_router.include_router(billing_router, tags=["Admin - Billing & Transactions"])
 admin_router.include_router(llm_config_router, tags=["Admin - LLM Configuration"])
+admin_router.include_router(feedback_router, tags=["Admin - Feedback & Continuous Improvement"])
+
 

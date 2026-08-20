@@ -5,9 +5,10 @@ import json
 import logging
 from pathlib import Path
 import time
-from typing import Optional
+from typing import Any, Dict, List, Optional
 import uuid
 from sqlalchemy import and_, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import AsyncSessionLocal
 from app.models.task import EmailTask
@@ -18,6 +19,7 @@ from app.core.normalizer import default_normalizer
 from app.core.parser import process_uploaded_files
 from app.core.validator import default_validator
 from app.services.billing_service import BillingService
+from app.services.few_shot_service import FewShotService
 from app.services.vision_service import VisionBudget, VisionService
 from app.services.webhook_dispatcher import dispatch_webhook
 
@@ -141,8 +143,15 @@ class ExtractionService:
                 payload = SkillV3InputPayload(**raw_dict)
 
 
-            # Step 2: Extract Draft JSON using SenseTime LLM
-            draft_json = await default_skill_runner.extract_draft_json(payload)
+            # Step 2: Extract Draft JSON using SenseTime LLM with dynamic Few-Shot injection
+            few_shot_snippet = ""
+            try:
+                async with AsyncSessionLocal() as db_fs:
+                    few_shot_snippet = await FewShotService.build_few_shot_prompt_section(db_fs)
+            except Exception as fs_err:
+                logger.debug("FewShot prompt snippet loading skipped: %s", fs_err)
+
+            draft_json = await default_skill_runner.extract_draft_json(payload, few_shot_snippet=few_shot_snippet)
 
             # Step 3: Normalize with Skill V3 Rules
             final_v3_json = default_normalizer.normalize(draft_json)
@@ -282,3 +291,42 @@ class ExtractionService:
                             payload=webhook_data,
                         )
                         await db.commit()
+
+    @classmethod
+    async def extract_mail_content(
+        cls,
+        db: AsyncSession,
+        subject: str = "",
+        body: str = "",
+        attachment_paths: Optional[List[str]] = None,
+        tenant_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Directly extracts and normalizes mail/document content (used for benchmark evaluation and sync extraction).
+        """
+        few_shot_snippet = ""
+        try:
+            few_shot_snippet = await FewShotService.build_few_shot_prompt_section(db)
+        except Exception as fs_err:
+            logger.debug("FewShot prompt snippet loading skipped: %s", fs_err)
+
+        if attachment_paths:
+            file_paths = [Path(p) for p in attachment_paths if Path(p).exists()]
+            if file_paths:
+                vision_budget = VisionBudget(settings.VISION_MAX_IMAGES_PER_TASK)
+                payload = await asyncio.to_thread(
+                    process_uploaded_files,
+                    file_paths=file_paths,
+                    subject=subject,
+                    body=body,
+                    temp_dir=settings.uploads_path,
+                    vision_budget=vision_budget,
+                )
+            else:
+                payload = SkillV3InputPayload(mail_subject=subject, mail_body=body, attachments=[])
+        else:
+            payload = SkillV3InputPayload(mail_subject=subject, mail_body=body, attachments=[])
+
+        draft_json = await default_skill_runner.extract_draft_json(payload, few_shot_snippet=few_shot_snippet)
+        final_v3_json = default_normalizer.normalize(draft_json)
+        return final_v3_json

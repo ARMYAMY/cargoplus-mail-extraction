@@ -460,8 +460,118 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
 
-  // 5. Task Detail Inspector Modal
+  // 5. Task Detail Inspector & Inline Feedback
+  let currentDetailTaskId = null;
+  let currentTaskOriginalJson = {};
+  let currentTaskEditedJson = {};
+
+  window.switchTaskDetailView = function(viewName) {
+    const viewFields = document.getElementById('ptd-view-fields');
+    const viewJson = document.getElementById('ptd-view-json');
+    const tabFields = document.getElementById('ptd-tab-fields');
+    const tabJson = document.getElementById('ptd-tab-json');
+
+    if (viewName === 'fields') {
+      if (viewFields) viewFields.style.display = 'block';
+      if (viewJson) viewJson.style.display = 'none';
+      if (tabFields) { tabFields.className = 'btn btn-sm btn-primary'; }
+      if (tabJson) { tabJson.className = 'btn btn-sm btn-secondary'; }
+    } else {
+      if (viewFields) viewFields.style.display = 'none';
+      if (viewJson) viewJson.style.display = 'block';
+      if (tabFields) { tabFields.className = 'btn btn-sm btn-secondary'; }
+      if (tabJson) { tabJson.className = 'btn btn-sm btn-primary'; }
+    }
+  };
+
+  function updateDiffCounter() {
+    let diffCount = 0;
+    const allKeys = new Set([...Object.keys(currentTaskOriginalJson), ...Object.keys(currentTaskEditedJson)]);
+    allKeys.forEach(k => {
+      const origVal = currentTaskOriginalJson[k];
+      const editVal = currentTaskEditedJson[k];
+      if (JSON.stringify(origVal) !== JSON.stringify(editVal)) {
+        diffCount++;
+      }
+    });
+    const counterEl = document.getElementById('ptd-diff-counter');
+    if (counterEl) {
+      if (diffCount > 0) {
+        counterEl.textContent = `已修改 ${diffCount} 个字段 (有变更)`;
+        counterEl.style.color = '#fbbf24';
+      } else {
+        counterEl.textContent = '未作修改 (与原始一致)';
+        counterEl.style.color = '#38bdf8';
+      }
+    }
+  }
+
+  function renderTaskFieldsTable(jsonObj) {
+    const tbody = document.getElementById('tbody-ptd-fields');
+    if (!tbody) return;
+
+    if (!jsonObj || Object.keys(jsonObj).length === 0) {
+      tbody.innerHTML = '<tr><td colspan="2" class="text-center text-muted py-6">暂无结构化字段数据</td></tr>';
+      return;
+    }
+
+    const rowsHtml = Object.entries(jsonObj).map(([key, val]) => {
+      const isComplex = typeof val === 'object' && val !== null;
+      const displayVal = isComplex ? JSON.stringify(val, null, 2) : (val !== null && val !== undefined ? String(val) : '');
+      const isOriginalSame = JSON.stringify(currentTaskOriginalJson[key]) === JSON.stringify(currentTaskEditedJson[key]);
+
+      return `
+        <tr data-key="${escapeHtml(key)}" style="${!isOriginalSame ? 'background: rgba(245, 158, 11, 0.08);' : ''}">
+          <td style="font-weight:600; color:#38bdf8; font-family:var(--font-mono); vertical-align:middle;">
+            ${escapeHtml(key)}
+            ${!isOriginalSame ? '<span class="badge badge-warning" style="margin-left:4px; font-size:0.7rem;">已改</span>' : ''}
+          </td>
+          <td>
+            ${isComplex
+              ? `<textarea class="form-control font-mono ptd-field-input" data-key="${escapeHtml(key)}" rows="3" style="width:100%; font-size:0.8rem; background:rgba(0,0,0,0.3); border:1px solid ${!isOriginalSame ? '#fbbf24' : 'rgba(255,255,255,0.1)'}; color:#fff; border-radius:6px; padding:6px 10px;">${escapeHtml(displayVal)}</textarea>`
+              : `<input type="text" class="form-control ptd-field-input" data-key="${escapeHtml(key)}" value="${escapeHtml(displayVal)}" style="width:100%; font-size:0.84rem; background:rgba(0,0,0,0.3); border:1px solid ${!isOriginalSame ? '#fbbf24' : 'rgba(255,255,255,0.1)'}; color:#fff; border-radius:6px; padding:6px 10px;">`
+            }
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    tbody.innerHTML = rowsHtml;
+
+    // Attach change listeners
+    tbody.querySelectorAll('.ptd-field-input').forEach(input => {
+      input.addEventListener('input', (e) => {
+        const key = e.target.getAttribute('data-key');
+        let newVal = e.target.value;
+        if (typeof currentTaskOriginalJson[key] === 'object' && currentTaskOriginalJson[key] !== null) {
+          try {
+            newVal = JSON.parse(newVal);
+          } catch (_) {}
+        }
+        currentTaskEditedJson[key] = newVal;
+        updateDiffCounter();
+
+        // Update row highlight
+        const row = e.target.closest('tr');
+        if (row) {
+          const isSame = JSON.stringify(currentTaskOriginalJson[key]) === JSON.stringify(currentTaskEditedJson[key]);
+          row.style.background = isSame ? '' : 'rgba(245, 158, 11, 0.08)';
+          e.target.style.borderColor = isSame ? 'rgba(255,255,255,0.1)' : '#fbbf24';
+        }
+      });
+    });
+
+    updateDiffCounter();
+  }
+
+  window.resetTaskFieldModifications = function() {
+    currentTaskEditedJson = JSON.parse(JSON.stringify(currentTaskOriginalJson));
+    renderTaskFieldsTable(currentTaskEditedJson);
+    showToast('info', '已重置所有字段为系统提取原值');
+  };
+
   window.viewTaskDetail = async function (taskId) {
+    currentDetailTaskId = taskId;
     try {
       const res = await portalFetch(`/api/v1/tasks/${taskId}`);
       if (!res.ok) throw new Error('任务查询失败');
@@ -473,6 +583,10 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('ptd-charge').innerHTML = task.is_charged ? `<strong class="text-danger">¥${parseFloat(task.charged_amount).toFixed(2)}</strong>` : '<span class="text-muted">¥0.00 (免扣费)</span>';
 
       const jsonCode = document.getElementById('ptd-json-code');
+      const resJson = task.result_json || {};
+      currentTaskOriginalJson = JSON.parse(JSON.stringify(resJson));
+      currentTaskEditedJson = JSON.parse(JSON.stringify(resJson));
+
       if (task.result_json) {
         jsonCode.textContent = JSON.stringify(task.result_json, null, 2);
       } else if (task.error_message) {
@@ -481,9 +595,108 @@ document.addEventListener('DOMContentLoaded', () => {
         jsonCode.textContent = '// 暂无提取结果';
       }
 
+      // Render editable fields table
+      renderTaskFieldsTable(currentTaskEditedJson);
+      switchTaskDetailView('fields');
+
+      // Check existing feedback status for this task
+      const feedbackBanner = document.getElementById('ptd-feedback-banner');
+      if (feedbackBanner) {
+        try {
+          const fbRes = await portalFetch(`/api/v1/tasks/${taskId}/feedback`);
+          if (fbRes.ok) {
+            const fbJson = await fbRes.json();
+            const fb = fbJson.data;
+            if (fb) {
+              feedbackBanner.style.display = 'block';
+              if (fb.status === 'ACCEPTED') {
+                feedbackBanner.style.background = 'rgba(16, 185, 129, 0.15)';
+                feedbackBanner.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+                feedbackBanner.innerHTML = `<strong class="text-success">✓ 纠错已采纳</strong>: 管理员已确认提取错误并采纳${fb.is_refunded ? `，<strong class="text-danger">已退款冲正 ¥${fb.refund_amount}</strong>` : ''}。审核批注: ${escapeHtml(fb.review_comment || '无')}`;
+              } else if (fb.status === 'RESOLVED') {
+                feedbackBanner.style.background = 'rgba(56, 189, 248, 0.15)';
+                feedbackBanner.style.border = '1px solid rgba(56, 189, 248, 0.4)';
+                feedbackBanner.innerHTML = `<strong style="color:#38bdf8;">✓ 已优化发布 (${escapeHtml(fb.resolved_version || '最新版本')})</strong>: 该单证问题已通过动态知识库/规则发布修复！`;
+              } else if (fb.status === 'REJECTED') {
+                feedbackBanner.style.background = 'rgba(239, 68, 68, 0.15)';
+                feedbackBanner.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+                feedbackBanner.innerHTML = `<strong class="text-danger">✗ 反馈已驳回</strong>: 批注原因: ${escapeHtml(fb.review_comment || '系统提取符合原件')}`;
+              } else {
+                feedbackBanner.style.background = 'rgba(245, 158, 11, 0.15)';
+                feedbackBanner.style.border = '1px solid rgba(245, 158, 11, 0.4)';
+                feedbackBanner.innerHTML = `<strong class="text-warning">⏳ 纠错反馈待审核</strong>: 您已提交纠错反馈 (包含 ${fb.diff_fields ? fb.diff_fields.length : 0} 处修改)，管理员核实确认后将自动退还调用费用。`;
+              }
+            } else {
+              feedbackBanner.style.display = 'none';
+            }
+          }
+        } catch (_) {
+          feedbackBanner.style.display = 'none';
+        }
+      }
+
       openModal('modal-portal-task-detail');
     } catch (err) {
       showToast('error', `查看任务详情失败: ${err.message}`);
+    }
+  };
+
+  window.submitTaskFeedback = async function() {
+    if (!currentDetailTaskId) return;
+
+    let diffCount = 0;
+    const allKeys = new Set([...Object.keys(currentTaskOriginalJson), ...Object.keys(currentTaskEditedJson)]);
+    allKeys.forEach(k => {
+      if (JSON.stringify(currentTaskOriginalJson[k]) !== JSON.stringify(currentTaskEditedJson[k])) {
+        diffCount++;
+      }
+    });
+
+    const notesInput = document.getElementById('ptd-feedback-notes');
+    const notes = notesInput ? notesInput.value.trim() : '';
+
+    if (diffCount === 0 && !notes) {
+      showToast('warning', '您尚未修改任何字段，且未填写问题说明');
+      return;
+    }
+
+    const confirmed = await showConfirmModal({
+      title: '提交纠错反馈确认',
+      message: `您修改了 ${diffCount} 个字段。提交后管理员将在后台审核核实，确认为系统错误后将自动原路退还本次调用费用并优化模型规则。是否确认提交？`,
+      confirmText: '立即提交反馈',
+      cancelText: '再看看',
+      type: 'warning',
+    });
+    if (!confirmed) return;
+
+    try {
+      const btn = document.getElementById('btn-submit-task-feedback');
+      if (btn) { btn.disabled = true; btn.textContent = '提交中...'; }
+
+      const res = await portalFetch(`/api/v1/tasks/${currentDetailTaskId}/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          corrected_result: currentTaskEditedJson,
+          notes: notes,
+        }),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || `HTTP ${res.status}`);
+      }
+
+      const resData = await res.json();
+      showToast('success', resData.message || '纠错反馈提交成功！');
+
+      // Refresh task detail view
+      await window.viewTaskDetail(currentDetailTaskId);
+    } catch (err) {
+      showToast('error', `提交反馈失败: ${err.message}`);
+    } finally {
+      const btn = document.getElementById('btn-submit-task-feedback');
+      if (btn) { btn.disabled = false; btn.textContent = '提交纠错反馈'; }
     }
   };
 

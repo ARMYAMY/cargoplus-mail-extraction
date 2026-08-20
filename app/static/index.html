@@ -264,6 +264,10 @@ FREIGHT TERM: PREPAID`;
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
           <span>大模型配置</span>
         </button>
+        <button class="nav-item" data-tab="feedback_optimization" id="nav-feedback-optimization">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="9" y1="10" x2="15" y2="10"/></svg>
+          <span>反馈与模型优化</span>
+        </button>
       </nav>
 
 
@@ -924,7 +928,363 @@ FREIGHT TERM: PREPAID`;
           </div>
         </div>
       </section>
+
+      <!-- TAB 6: FEEDBACK & CONTINUOUS OPTIMIZATION -->
+      <section class="tab-content" id="tab-feedback_optimization">
+        <!-- Sub Tabs Header -->
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:20px;">
+          <div class="sub-tab-pill-group" style="display:flex; gap:8px;">
+            <button type="button" class="btn btn-secondary active" id="btn-subtab-fb-audit" onclick="switchFeedbackSubTab('audit')">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              <span>纠错反馈审核 (含退费)</span>
+            </button>
+            <button type="button" class="btn btn-secondary" id="btn-subtab-fb-fewshot" onclick="switchFeedbackSubTab('fewshot')">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+              <span>动态 Few-Shot 样本库</span>
+            </button>
+            <button type="button" class="btn btn-secondary" id="btn-subtab-fb-release" onclick="switchFeedbackSubTab('release')">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
+              <span>金标自动回归评测 & 发布</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- SubView 1: Feedback Audit -->
+        <div id="subview-fb-audit">
+          <div class="card" style="margin-bottom: 20px;">
+            <div class="card-body" style="padding: 16px 20px;">
+              <div style="display: flex; gap: 14px; align-items: center; justify-content: space-between; flex-wrap: wrap;">
+                <div style="display: flex; gap: 10px; align-items: center;">
+                  <select id="filter-fb-status" class="form-control" style="width: 140px; font-size: 0.84rem;">
+                    <option value="">全部状态</option>
+                    <option value="PENDING" selected>待审核 (PENDING)</option>
+                    <option value="ACCEPTED">已采纳/退费 (ACCEPTED)</option>
+                    <option value="RESOLVED">已解决发布 (RESOLVED)</option>
+                    <option value="REJECTED">已驳回 (REJECTED)</option>
+                  </select>
+                  <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-feedbacks" onclick="loadAdminFeedbacks()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+                    <span>刷新</span>
+                  </button>
+                </div>
+                <div style="display: flex; gap: 12px; font-size: 0.82rem; color: var(--text-secondary);">
+                  <span>待审核: <strong class="text-warning" id="stat-fb-pending">0</strong></span>
+                  <span>已采纳退费: <strong class="text-success" id="stat-fb-accepted">0</strong></span>
+                  <span>已修复发布: <strong style="color: #38bdf8;" id="stat-fb-resolved">0</strong></span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-body" style="padding: 0;">
+              <div class="table-responsive">
+                <table class="data-table" id="table-admin-feedbacks">
+                  <thead>
+                    <tr>
+                      <th>工单 ID</th>
+                      <th>所属租户</th>
+                      <th>关联任务</th>
+                      <th>差异字段数</th>
+                      <th>状态</th>
+                      <th>退款冲正</th>
+                      <th>客户纠错说明</th>
+                      <th>提交时间</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr><td colspan="9" class="text-center text-muted py-8">正在加载反馈工单...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- SubView 2: Dynamic Few-Shot Knowledge Base -->
+        <div id="subview-fb-fewshot" style="display: none;">
+          <div class="card" style="margin-bottom: 20px;">
+            <div class="card-body" style="padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+              <div>
+                <h4 style="margin: 0 0 4px 0; font-size: 0.95rem; color: #fff;">动态 Few-Shot 少样本知识库</h4>
+                <p style="margin: 0; font-size: 0.78rem; color: var(--text-secondary);">采纳的典型纠错案例将自动注入大模型上下文 Prompt，秒级热重载生效，无需重启容器或重新微调。</p>
+              </div>
+              <button type="button" class="btn btn-primary btn-sm" onclick="openFewShotEditModal()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                <span>新增少样本示例</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-body" style="padding: 0;">
+              <div class="table-responsive">
+                <table class="data-table" id="table-admin-fewshots">
+                  <thead>
+                    <tr>
+                      <th>示例名称</th>
+                      <th>单证类型</th>
+                      <th>优先级</th>
+                      <th>状态</th>
+                      <th>输入截选</th>
+                      <th>更新时间</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr><td colspan="7" class="text-center text-muted py-8">正在加载 Few-Shot 示例...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- SubView 3: Benchmark Regression & Release -->
+        <div id="subview-fb-release" style="display: none;">
+          <div class="card" style="margin-bottom: 20px;">
+            <div class="card-body" style="padding: 20px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px;">
+                <div>
+                  <h4 style="margin: 0 0 6px 0; font-size: 1.05rem; color: #fff;">金标评测集自动回归测试与版本发布门禁</h4>
+                  <p style="margin: 0; font-size: 0.8rem; color: var(--text-secondary);">执行全量金标用例回归，确保修改规则与少样本后准确率提升且核心关键字段（提单号、箱号、港口、船名）无退化。</p>
+                </div>
+                <div style="display: flex; gap: 10px;">
+                  <button type="button" class="btn btn-secondary" id="btn-run-eval" onclick="triggerRegressionEvaluation()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    <span id="btn-run-eval-label">▶ 运行全量金标回归评测</span>
+                  </button>
+                  <button type="button" class="btn btn-primary" id="btn-open-release-modal" onclick="openVersionReleaseModal()" disabled>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/></svg>
+                    <span>发布新版本</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Evaluation Live Dashboard Result -->
+              <div id="eval-result-card" style="display: none; margin-top: 20px; padding: 18px; background: rgba(0,0,0,0.35); border: 1px solid var(--border-color); border-radius: 10px;">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 16px;">
+                  <div style="background: rgba(255,255,255,0.03); padding: 12px 14px; border-radius: 8px;">
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">评测用例总数</div>
+                    <div style="font-size: 1.3rem; font-weight: 700; color: #fff;" id="eval-total-cases">0</div>
+                  </div>
+                  <div style="background: rgba(255,255,255,0.03); padding: 12px 14px; border-radius: 8px;">
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">综合准确率</div>
+                    <div style="font-size: 1.3rem; font-weight: 700;" id="eval-overall-acc">-</div>
+                  </div>
+                  <div style="background: rgba(255,255,255,0.03); padding: 12px 14px; border-radius: 8px;">
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">核心字段退化数</div>
+                    <div style="font-size: 1.3rem; font-weight: 700;" id="eval-regressions">0</div>
+                  </div>
+                  <div style="background: rgba(255,255,255,0.03); padding: 12px 14px; border-radius: 8px;">
+                    <div style="font-size: 0.75rem; color: var(--text-secondary);">评测耗时</div>
+                    <div style="font-size: 1.3rem; font-weight: 700; color: #38bdf8;" id="eval-duration">0s</div>
+                  </div>
+                </div>
+
+                <div id="eval-release-gate-msg" style="padding: 10px 14px; border-radius: 8px; font-size: 0.85rem; font-weight: 600;"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Version Release History Table -->
+          <div class="card">
+            <div class="card-header" style="padding: 14px 20px; border-bottom: 1px solid var(--border-color);">
+              <h4 style="margin: 0; font-size: 0.92rem; color: #fff;">版本发布与归档历史 (Release History)</h4>
+            </div>
+            <div class="card-body" style="padding: 0;">
+              <div class="table-responsive">
+                <table class="data-table" id="table-admin-versions">
+                  <thead>
+                    <tr>
+                      <th>版本号</th>
+                      <th>基准准确率</th>
+                      <th>通过用例数</th>
+                      <th>解决工单数</th>
+                      <th>变更说明</th>
+                      <th>发布时间</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr><td colspan="6" class="text-center text-muted py-6">暂无版本发布记录</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
     </main>
+  </div>
+
+  <!-- Modal: Visual Diff Inspector & Audit -->
+  <div class="modal" id="modal-feedback-diff" role="dialog" aria-modal="true">
+    <div class="modal-dialog modal-xl" style="max-width: 1060px;">
+      <div class="modal-header">
+        <h3 id="fd-modal-title">纠错反馈 Diff 可视化审核</h3>
+        <button class="modal-close" data-close="modal-feedback-diff">&times;</button>
+      </div>
+      <div class="modal-body" style="max-height: calc(85vh - 140px); overflow-y: auto;">
+        <!-- Overview Grid -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; padding: 12px 16px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 16px;">
+          <div><span class="text-muted" style="font-size:0.75rem;">工单ID:</span> <strong id="fd-id" class="font-mono" style="color:#38bdf8;"></strong></div>
+          <div><span class="text-muted" style="font-size:0.75rem;">所属企业:</span> <strong id="fd-tenant"></strong></div>
+          <div><span class="text-muted" style="font-size:0.75rem;">状态:</span> <span id="fd-status-badge"></span></div>
+          <div><span class="text-muted" style="font-size:0.75rem;">客户纠错说明:</span> <span id="fd-notes" style="color:#fbbf24;"></span></div>
+        </div>
+
+        <!-- Diff Columns -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+          <!-- Left: Original -->
+          <div style="border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; overflow: hidden;">
+            <div style="padding: 8px 14px; background: rgba(239, 68, 68, 0.12); color: #f87171; font-weight: 600; font-size: 0.84rem; display: flex; justify-content: space-between;">
+              <span>系统原抽取结果 (Original)</span>
+            </div>
+            <div style="max-height: 380px; overflow-y: auto; padding: 8px 12px; background: rgba(0,0,0,0.4);">
+              <table class="data-table" id="table-fd-original" style="font-size: 0.8rem; width: 100%;">
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Right: Corrected Ground Truth -->
+          <div style="border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 8px; overflow: hidden;">
+            <div style="padding: 8px 14px; background: rgba(16, 185, 129, 0.12); color: #34d399; font-weight: 600; font-size: 0.84rem; display: flex; justify-content: space-between;">
+              <span>客户修正目标值 (Ground Truth)</span>
+            </div>
+            <div style="max-height: 380px; overflow-y: auto; padding: 8px 12px; background: rgba(0,0,0,0.4);">
+              <table class="data-table" id="table-fd-corrected" style="font-size: 0.8rem; width: 100%;">
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Audit Action Form -->
+        <div id="fd-audit-action-panel" style="margin-top: 18px; padding: 14px 18px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px;">
+          <h4 style="margin: 0 0 10px 0; font-size: 0.88rem; color: #fff;">审核与归因处置</h4>
+          <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 14px; margin-bottom: 12px;">
+            <div>
+              <label style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 4px; display: block;">错误归因环节 *:</label>
+              <select id="fd-error-category" class="form-control" style="font-size: 0.84rem;">
+                <option value="PROMPT_LLM">大模型理解与提示词偏差 (PROMPT_LLM)</option>
+                <option value="VISION_OCR">多模态与图片识别失真 (VISION_OCR)</option>
+                <option value="PARSER">单证解析器截断异常 (PARSER)</option>
+                <option value="RULE_CLEAN">正则与字典清洗规则缺失 (RULE_CLEAN)</option>
+                <option value="CLIENT_ERROR">客户误报/格式不符 (CLIENT_ERROR)</option>
+              </select>
+            </div>
+            <div>
+              <label style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 4px; display: block;">审核批注 / 驳回原因说明:</label>
+              <input type="text" id="fd-review-comment" class="form-control" placeholder="请输入审核批注或驳回说明" style="font-size: 0.84rem;">
+            </div>
+          </div>
+          <div style="display: flex; gap: 16px; align-items: center; font-size: 0.82rem; color: var(--text-secondary);">
+            <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" id="fd-auto-refund" checked style="width: 15px; height: 15px;">
+              <span>自动执行本次调用扣费退款冲正 (¥0.50)</span>
+            </label>
+            <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+              <input type="checkbox" id="fd-create-fewshot" checked style="width: 15px; height: 15px;">
+              <span>自动将该用例生成 Few-Shot 少样本</span>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: space-between;">
+        <button type="button" class="btn btn-secondary" data-close="modal-feedback-diff">取消</button>
+        <div style="display: flex; gap: 10px;">
+          <button type="button" class="btn btn-danger btn-sm" id="btn-fd-reject" onclick="doAuditFeedback('REJECTED')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+            <span>驳回反馈</span>
+          </button>
+          <button type="button" class="btn btn-success btn-sm" id="btn-fd-accept" onclick="doAuditFeedback('ACCEPTED')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+            <span>采纳并自动退款</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Add / Edit Few-Shot Example -->
+  <div class="modal" id="modal-few-shot-edit" role="dialog" aria-modal="true">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 id="fse-title">新增 Few-Shot 少样本示例</h3>
+        <button class="modal-close" data-close="modal-few-shot-edit">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="form-few-shot-edit">
+          <input type="hidden" id="fse-id">
+          <div class="form-group">
+            <label>示例标题 *:</label>
+            <input type="text" class="form-control" id="fse-name" required placeholder="例如: 提单印章遮挡目的港纠错">
+          </div>
+          <div class="form-row">
+            <div class="form-group col-6">
+              <label>单证类型:</label>
+              <input type="text" class="form-control" id="fse-doctype" value="GENERAL" placeholder="GENERAL">
+            </div>
+            <div class="form-group col-6">
+              <label>优先级 (1-100):</label>
+              <input type="number" class="form-control font-mono" id="fse-priority" value="20" min="1" max="100">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>输入单证截选片段 (Input Excerpt) *:</label>
+            <textarea class="form-control font-mono" id="fse-input" rows="4" required placeholder="粘贴产生歧义或错误的原始单证文本片段..."></textarea>
+          </div>
+          <div class="form-group">
+            <label>期望标准输出 JSON (Expected Output JSON) *:</label>
+            <textarea class="form-control font-mono" id="fse-output" rows="5" required placeholder='{"PortOfDischarge": "HAMBURG", "BookingNo": "BK123456"}'></textarea>
+          </div>
+          <div class="form-group">
+            <label style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="checkbox" id="fse-active" checked style="width: 16px; height: 16px;">
+              <span>立即启用该示例并热加载注入 Prompt</span>
+            </label>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-close="modal-few-shot-edit">取消</button>
+        <button type="button" class="btn btn-primary" id="btn-save-few-shot" onclick="saveFewShotExample()">保存并生效</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Release Version -->
+  <div class="modal" id="modal-version-release" role="dialog" aria-modal="true">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>🚀 发布新版本并归档工单</h3>
+        <button class="modal-close" data-close="modal-version-release">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="form-version-release">
+          <div class="form-group">
+            <label>版本号 (如 v1.1.0) *:</label>
+            <input type="text" class="form-control font-mono" id="vr-tag" required placeholder="v1.1.0">
+          </div>
+          <div class="form-group">
+            <label>版本更新说明 (Changelog):</label>
+            <textarea class="form-control" id="vr-changelog" rows="4" placeholder="例如: 优化提单印章识别规则，新增 3 个 Few-Shot 纠错样本，全量回归评测通过。"></textarea>
+          </div>
+          <div class="form-group">
+            <label style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="checkbox" id="vr-mark-resolved" checked style="width: 16px; height: 16px;">
+              <span>自动将所有已采纳的待解决反馈工单标记为 [已解决 (RESOLVED)]</span>
+            </label>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-close="modal-version-release">取消</button>
+        <button type="button" class="btn btn-primary" id="btn-confirm-release" onclick="doReleaseVersion()">确认发布版本</button>
+      </div>
+    </div>
   </div>
 
   <!-- Modal: Create Tenant -->
