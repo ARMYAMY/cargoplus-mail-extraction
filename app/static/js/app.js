@@ -28,7 +28,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     try {
-      const response = await fetch(url, { ...options, headers });
+      const response = await fetch(url, { ...options, headers, credentials: 'same-origin' });
 
       // 1. Sliding Session: Update token if backend returned refreshed token
       const refreshedToken = response.headers.get('X-Refreshed-Token');
@@ -50,6 +50,36 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) {
       throw err;
     }
+  }
+
+  async function downloadAdminAttachment(feedbackId, filename) {
+    const url = `/admin/feedbacks/${encodeURIComponent(feedbackId)}/attachments/${encodeURIComponent(filename)}`;
+    const response = await adminFetch(url, { method: 'GET' });
+    if (!response.ok) {
+      let detail = '';
+      try {
+        const body = await response.json();
+        detail = typeof body?.detail === 'string' ? body.detail : '';
+      } catch (_) {
+        // The proxy may return a plain-text or HTML error page.
+      }
+      throw new Error(detail || `服务返回 HTTP ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    if (blob.size === 0) {
+      throw new Error('服务器返回了空附件');
+    }
+    const blobUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    // WebView/Safari may not start reading the Blob until after this handler
+    // returns, so revoking synchronously can cancel an otherwise valid download.
+    window.setTimeout(() => window.URL.revokeObjectURL(blobUrl), 60_000);
   }
 
   // Tab Switching
@@ -2746,10 +2776,77 @@ MEAS: 68.000 CBM`;
       document.getElementById('fd-notes').textContent = fb.notes || '客户未填写备注';
 
       let statusBadge = '<span class="badge badge-warning">待审核 (PENDING)</span>';
-      if (fb.status === 'ACCEPTED') statusBadge = '<span class="badge badge-success">已采纳/已退费</span>';
-      else if (fb.status === 'RESOLVED') statusBadge = `<span class="badge" style="background:#0284c7; color:#fff;">已发布解决 (${fb.resolved_version})</span>`;
+      if (fb.status === 'ACCEPTED') {
+        statusBadge = fb.is_refunded
+          ? '<span class="badge badge-success">已采纳/已退费</span>'
+          : '<span class="badge badge-success">已采纳/未退费</span>';
+      }
+      else if (fb.status === 'RESOLVED') statusBadge = `<span class="badge" style="background:#0284c7; color:#fff;">已发布解决 (${escapeHtml(fb.resolved_version || '最新')})</span>`;
       else if (fb.status === 'REJECTED') statusBadge = '<span class="badge badge-danger">已驳回 (REJECTED)</span>';
       document.getElementById('fd-status-badge').innerHTML = statusBadge;
+
+      // Populate Original Input Source panel
+      const inputTypeBadge = document.getElementById('fd-input-type-badge');
+      if (inputTypeBadge) inputTypeBadge.textContent = fb.input_type || '-';
+      const taskSubjectEl = document.getElementById('fd-task-subject');
+      if (taskSubjectEl) taskSubjectEl.textContent = fb.task_subject || '-';
+      const taskTimeEl = document.getElementById('fd-task-time');
+      if (taskTimeEl) taskTimeEl.textContent = fb.task_time || '-';
+
+      const filePathsRow = document.getElementById('fd-file-paths-row');
+      const filePathsEl = document.getElementById('fd-file-paths');
+      if (fb.file_paths && fb.file_paths.length > 0) {
+        if (filePathsEl) {
+          const fileNames = fb.file_paths
+            .filter(p => typeof p === 'string')
+            .map(p => String(p).split(/[\\/]/).pop())
+            .filter(Boolean);
+          filePathsEl.replaceChildren();
+          fileNames.forEach((name) => {
+            const downloadLink = document.createElement('a');
+            downloadLink.href = '#';
+            downloadLink.dataset.feedbackId = String(fb.id);
+            downloadLink.dataset.filename = name;
+            downloadLink.className = 'fd-download-link';
+            downloadLink.textContent = name;
+            downloadLink.style.color = '#38bdf8';
+            downloadLink.style.textDecoration = 'underline';
+            downloadLink.style.marginRight = '10px';
+            filePathsEl.appendChild(downloadLink);
+          });
+          if (filePathsRow) filePathsRow.style.display = fileNames.length > 0 ? '' : 'none';
+        }
+      } else {
+        if (filePathsRow) filePathsRow.style.display = 'none';
+        if (filePathsEl) filePathsEl.replaceChildren();
+      }
+
+      const inputSummaryEl = document.getElementById('fd-input-summary');
+      if (inputSummaryEl) {
+        let displayText = '';
+        if (fb.input_summary) {
+          displayText = fb.input_summary;
+        } else if (fb.raw_input_json) {
+          displayText = typeof fb.raw_input_json === 'string' ? fb.raw_input_json : JSON.stringify(fb.raw_input_json, null, 2);
+        } else {
+          displayText = '（无原始输入文本记录）';
+        }
+        inputSummaryEl.textContent = displayText;
+      }
+
+      const refundCheckbox = document.getElementById('fd-auto-refund');
+      const refundLabel = document.getElementById('fd-refund-label');
+      const chargedAmount = Number(fb.charged_amount || 0);
+      const canRefund = Boolean(fb.is_charged) && Number.isFinite(chargedAmount) && chargedAmount > 0;
+      if (refundCheckbox) {
+        refundCheckbox.disabled = !canRefund;
+        refundCheckbox.checked = canRefund && !fb.is_refunded;
+      }
+      if (refundLabel) {
+        refundLabel.textContent = canRefund
+          ? `自动执行本次调用扣费退款冲正 (¥${chargedAmount.toFixed(2)})`
+          : '该任务无有效原始扣款，不执行退款';
+      }
 
       const diffSet = new Set(fb.diff_fields || []);
 
@@ -2786,14 +2883,16 @@ MEAS: 68.000 CBM`;
       document.getElementById('fd-review-comment').value = fb.review_comment || '';
 
       const actionPanel = document.getElementById('fd-audit-action-panel');
+      const footerBtns = document.getElementById('fd-footer-audit-btns');
       const btnReject = document.getElementById('btn-fd-reject');
       const btnAccept = document.getElementById('btn-fd-accept');
 
-      if (fb.status === 'RESOLVED' || fb.status === 'ACCEPTED') {
-        if (actionPanel) actionPanel.style.opacity = '0.7';
-        if (btnAccept) btnAccept.disabled = true;
+      if (fb.status !== 'PENDING') {
+        if (actionPanel) actionPanel.style.display = 'none';
+        if (footerBtns) footerBtns.style.display = 'none';
       } else {
-        if (actionPanel) actionPanel.style.opacity = '1';
+        if (actionPanel) { actionPanel.style.display = ''; actionPanel.style.opacity = '1'; }
+        if (footerBtns) footerBtns.style.display = 'flex';
         if (btnAccept) btnAccept.disabled = false;
         if (btnReject) btnReject.disabled = false;
       }
@@ -2803,6 +2902,26 @@ MEAS: 68.000 CBM`;
       showToast('error', `加载 Diff 详情失败: ${err.message}`);
     }
   };
+
+  document.addEventListener('click', async (e) => {
+    const link = e.target.closest?.('.fd-download-link');
+    if (!link) return;
+    e.preventDefault();
+    const feedbackId = link.getAttribute('data-feedback-id');
+    const filename = link.getAttribute('data-filename');
+    if (!feedbackId || !filename || link.dataset.downloading === 'true') return;
+    link.dataset.downloading = 'true';
+    link.setAttribute('aria-disabled', 'true');
+    try {
+      await downloadAdminAttachment(feedbackId, filename);
+    } catch (err) {
+      console.error('附件下载失败', err);
+      showToast('error', `附件下载失败：${err.message || '请稍后重试'}`, '下载失败');
+    } finally {
+      delete link.dataset.downloading;
+      link.removeAttribute('aria-disabled');
+    }
+  });
 
   window.doAuditFeedback = async function(actionStatus) {
     if (!currentAuditFeedbackId) return;
@@ -2983,6 +3102,7 @@ MEAS: 68.000 CBM`;
     const btnRelease = document.getElementById('btn-open-release-modal');
 
     if (btn) btn.disabled = true;
+    if (btnRelease) btnRelease.disabled = true;
     if (label) label.textContent = '评测执行中 (正在并发重跑金标用例)...';
 
     try {
@@ -2995,7 +3115,7 @@ MEAS: 68.000 CBM`;
       document.getElementById('eval-total-cases').textContent = evalData.total_cases || 0;
 
       const accEl = document.getElementById('eval-overall-acc');
-      const accVal = evalData.overall_accuracy_percent ?? 100.0;
+      const accVal = evalData.overall_accuracy_percent ?? 0.0;
       accEl.textContent = `${accVal}%`;
       accEl.style.color = accVal >= 90 ? '#34d399' : (accVal >= 80 ? '#fbbf24' : '#f87171');
 
@@ -3023,6 +3143,7 @@ MEAS: 68.000 CBM`;
 
       showToast('success', '金标回归评测执行完毕！');
     } catch (err) {
+      if (btnRelease) btnRelease.disabled = true;
       showToast('error', '回归评测失败: ' + err.message);
     } finally {
       if (btn) btn.disabled = false;

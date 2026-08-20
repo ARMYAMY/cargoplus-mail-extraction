@@ -473,8 +473,13 @@ class BillingService:
         reason: str = "反馈采纳退款冲正",
     ) -> Optional[BillingTransaction]:
         """
-        Atomically refunds a charged task deduction to tenant balance and records a REFUND transaction.
-        Idempotent: will not double refund if already refunded.
+        Atomically refunds the task's recorded deduction and stages a REFUND
+        transaction in the caller's database transaction.
+
+        The deduction ledger is the source of truth. A task without a positive
+        DEDUCTION transaction is never credited with a guessed/default amount.
+        The caller owns commit/rollback so the feedback decision and refund are
+        persisted as one unit.
         """
         lock = await _get_tenant_lock(tenant_id)
         async with lock:
@@ -488,7 +493,7 @@ class BillingService:
                 logger.info("Task %s already refunded (tx: %s)", task_id, existing_refund.id)
                 return existing_refund
 
-            # 2. Check task charge status
+            # 2. Check task charge status and its immutable deduction ledger.
             task_stmt = (
                 select(EmailTask)
                 .where(EmailTask.id == task_id, EmailTask.tenant_id == tenant_id)
@@ -498,10 +503,28 @@ class BillingService:
             if not task:
                 logger.warning("Task %s not found for refund", task_id)
                 return None
+            if not task.is_charged or Decimal(str(task.charged_amount or 0)) <= 0:
+                logger.info("Task %s was not charged; refund skipped", task_id)
+                return None
 
-            refund_amt = Decimal(str(task.charged_amount or "0.5000"))
-            if refund_amt <= 0:
-                refund_amt = Decimal("0.5000")
+            deduction_stmt = select(BillingTransaction).where(
+                BillingTransaction.task_id == task_id,
+                BillingTransaction.tenant_id == tenant_id,
+                BillingTransaction.type == "DEDUCTION",
+            )
+            deduction = (await db.execute(deduction_stmt)).scalar_one_or_none()
+            if deduction is None:
+                raise RuntimeError(
+                    f"Charged task {task_id} has no matching deduction transaction"
+                )
+
+            refund_amt = validate_money(
+                deduction.amount,
+                maximum=MAX_RECHARGE_AMOUNT,
+                minimum=MIN_RECHARGE_AMOUNT,
+                allow_zero=False,
+                field_name="refund amount",
+            )
 
             # 3. Atomically increase tenant balance
             balance_update = await db.execute(
@@ -515,9 +538,9 @@ class BillingService:
                 .execution_options(synchronize_session=False)
             )
             if balance_update.rowcount != 1:
-                await db.rollback()
-                logger.error("Failed to update tenant %s balance during refund", tenant_id)
-                return None
+                raise RuntimeError(
+                    f"Unable to credit refund without exceeding tenant {tenant_id} balance limits"
+                )
 
             tenant = (
                 await db.execute(
@@ -529,9 +552,6 @@ class BillingService:
 
             balance_after = Decimal(str(tenant.balance))
             balance_before = balance_after - refund_amt
-
-            # Update task
-            task.is_charged = False
 
             # Create REFUND transaction ledger
             tx = BillingTransaction(
@@ -545,8 +565,6 @@ class BillingService:
                 operator=operator,
             )
             db.add(tx)
-            await db.commit()
-            await db.refresh(tx)
+            await db.flush()
             logger.info("Successfully refunded %s to tenant %s for task %s (tx: %s)", refund_amt, tenant_id, task_id, tx.id)
             return tx
-

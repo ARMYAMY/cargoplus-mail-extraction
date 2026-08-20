@@ -1,42 +1,75 @@
 import asyncio
 import logging
 import time
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.database import AsyncSessionLocal
 from app.models.feedback import BenchmarkCase
 
 logger = logging.getLogger(__name__)
 
 CRITICAL_FIELDS = {
+    # Cargo V3 canonical fields.
     "BookingNo",
+    "BLNo",
+    "Vessel",
+    "Voyage",
+    "POL",
+    "POD",
+    "ContainerInfo",
+    "GrossWeight",
+    "Volume",
+    "Packages",
+    # Legacy aliases retained for historical benchmark records.
     "BillOfLadingNo",
     "VesselName",
-    "Voyage",
     "PortOfLoading",
     "PortOfDischarge",
     "ContainerList",
-    "GrossWeight",
-    "Volume",
     "PackageQuantity",
 }
 
 
 def _compare_values(actual: Any, expected: Any) -> bool:
-    """Helper to compare single field values permissively."""
-    if expected is None or expected == "":
-        return True  # If ground truth doesn't care, pass
+    """Compare a ground-truth value without accepting substring/length-only matches."""
+    if expected is None:
+        return actual is None
     if actual is None:
         return False
-    if isinstance(expected, (int, float)) and isinstance(actual, (int, float)):
-        return abs(float(actual) - float(expected)) < 1e-3
-    if isinstance(expected, list) and isinstance(actual, list):
-        if len(expected) == 0:
-            return True
-        return len(actual) >= len(expected)
-    act_str = str(actual).strip().lower().replace(" ", "").replace("-", "")
-    exp_str = str(expected).strip().lower().replace(" ", "").replace("-", "")
-    return act_str == exp_str or exp_str in act_str or act_str in exp_str
+    if isinstance(expected, bool):
+        return isinstance(actual, bool) and actual is expected
+    if isinstance(expected, (int, float, Decimal)):
+        try:
+            return abs(Decimal(str(actual)) - Decimal(str(expected))) <= Decimal("0.001")
+        except (InvalidOperation, TypeError, ValueError):
+            return False
+    if isinstance(expected, dict):
+        return isinstance(actual, dict) and all(
+            key in actual and _compare_values(actual[key], expected_value)
+            for key, expected_value in expected.items()
+        )
+    if isinstance(expected, list):
+        if not isinstance(actual, list) or len(actual) != len(expected):
+            return False
+        unmatched = list(actual)
+        for expected_item in expected:
+            match_index = next(
+                (
+                    index
+                    for index, actual_item in enumerate(unmatched)
+                    if _compare_values(actual_item, expected_item)
+                ),
+                None,
+            )
+            if match_index is None:
+                return False
+            unmatched.pop(match_index)
+        return True
+    actual_text = " ".join(str(actual).split()).casefold()
+    expected_text = " ".join(str(expected).split()).casefold()
+    return actual_text == expected_text
 
 
 def evaluate_extracted_against_ground_truth(
@@ -48,7 +81,7 @@ def evaluate_extracted_against_ground_truth(
     Returns: (accuracy_ratio, field_match_dict, diff_keys)
     """
     if not ground_truth:
-        return 1.0, {}, []
+        return 0.0, {}, []
 
     total_fields = 0
     matched_fields = 0
@@ -67,7 +100,8 @@ def evaluate_extracted_against_ground_truth(
         else:
             diff_keys.append(k)
 
-    acc = (matched_fields / total_fields) if total_fields > 0 else 1.0
+    # A ground truth containing only placeholders is not a successful test case.
+    acc = (matched_fields / total_fields) if total_fields > 0 else 0.0
     return acc, field_matches, diff_keys
 
 
@@ -93,65 +127,69 @@ class EvaluationService:
                 "total_cases": 0,
                 "passed_cases": 0,
                 "failed_cases": 0,
-                "overall_accuracy_percent": 100.0,
+                "overall_accuracy_percent": 0.0,
                 "duration_seconds": 0.0,
-                "can_release": True,
+                "can_release": False,
                 "critical_regressions_count": 0,
                 "field_accuracies": {},
                 "case_results": [],
             }
 
-        field_stats: Dict[str, Dict[str, int]] = {}
-        case_results = []
-        passed_cases = 0
-        critical_regressions = 0
+        safe_concurrency = max(1, min(int(max_concurrency), 8))
+        semaphore = asyncio.Semaphore(safe_concurrency)
 
-        # Run benchmark evaluation
-        for case in cases:
-            gt = case.ground_truth or {}
-            # In mock or test mode, run synthetic extraction or parse directly
+        async def evaluate_case(case: BenchmarkCase) -> Dict[str, Any]:
             from app.services.extraction_service import ExtractionService
-            
-            # Run extraction pipeline
-            simulated_extract = {}
-            try:
-                if case.input_text:
-                    simulated_extract = await ExtractionService.extract_mail_content(
-                        db=db,
-                        subject=case.title,
-                        body=case.input_text,
-                        attachment_paths=[case.raw_file_path] if case.raw_file_path else None,
-                        tenant_id=None,
-                    )
-            except Exception as ex:
-                logger.warning("Benchmark case %s extraction error: %s", case.id, ex)
-                simulated_extract = {}
 
-            acc, field_matches, diff_keys = evaluate_extracted_against_ground_truth(simulated_extract, gt)
+            extracted: Dict[str, Any] = {}
+            extraction_error: Optional[str] = None
+            async with semaphore:
+                try:
+                    if case.input_text or case.raw_file_path:
+                        async with AsyncSessionLocal() as case_db:
+                            extracted = await ExtractionService.extract_mail_content(
+                                db=case_db,
+                                subject=case.title,
+                                body=case.input_text or "",
+                                attachment_paths=[case.raw_file_path] if case.raw_file_path else None,
+                                tenant_id=None,
+                            )
+                except Exception as exc:
+                    extraction_error = str(exc)[:500]
+                    logger.warning("Benchmark case %s extraction error: %s", case.id, exc)
 
-            for f_name, match in field_matches.items():
-                if f_name not in field_stats:
-                    field_stats[f_name] = {"total": 0, "matched": 0}
-                field_stats[f_name]["total"] += 1
-                if match:
-                    field_stats[f_name]["matched"] += 1
-
-            has_critical_diff = any(k in CRITICAL_FIELDS for k in diff_keys)
-            is_case_passed = acc >= 0.85 and not has_critical_diff
-            if is_case_passed:
-                passed_cases += 1
-            if has_critical_diff:
-                critical_regressions += 1
-
-            case_results.append({
+            ground_truth = case.ground_truth or {}
+            accuracy, field_matches, diff_keys = evaluate_extracted_against_ground_truth(
+                extracted,
+                ground_truth,
+            )
+            has_critical_diff = any(key in CRITICAL_FIELDS for key in diff_keys)
+            is_passed = bool(ground_truth) and accuracy >= 0.85 and not has_critical_diff
+            return {
                 "case_id": case.id,
                 "title": case.title,
                 "doc_type": case.doc_type,
-                "accuracy_percent": round(acc * 100, 1),
-                "is_passed": is_case_passed,
+                "weight": max(1, int(case.weight or 1)),
+                "accuracy": accuracy,
+                "accuracy_percent": round(accuracy * 100, 1),
+                "is_passed": is_passed,
                 "diff_keys": diff_keys,
+                "field_matches": field_matches,
                 "critical_diff": has_critical_diff,
-            })
+                "error": extraction_error,
+            }
+
+        case_results = await asyncio.gather(*(evaluate_case(case) for case in cases))
+
+        field_stats: Dict[str, Dict[str, int]] = {}
+        passed_cases = sum(1 for result in case_results if result["is_passed"])
+        critical_regressions = sum(1 for result in case_results if result["critical_diff"])
+        for result in case_results:
+            for field_name, matched in result.pop("field_matches").items():
+                stats = field_stats.setdefault(field_name, {"total": 0, "matched": 0})
+                stats["total"] += 1
+                if matched:
+                    stats["matched"] += 1
 
         field_accuracies = {}
         for f_name, stats in field_stats.items():
@@ -159,7 +197,11 @@ class EvaluationService:
                 field_accuracies[f_name] = round((stats["matched"] / stats["total"]) * 100, 1)
 
         total_cases = len(cases)
-        overall_acc = round((passed_cases / total_cases) * 100, 1) if total_cases > 0 else 100.0
+        total_weight = sum(result["weight"] for result in case_results)
+        weighted_accuracy = sum(
+            result.pop("accuracy") * result["weight"] for result in case_results
+        )
+        overall_acc = round((weighted_accuracy / total_weight) * 100, 1) if total_weight else 0.0
         can_release = overall_acc >= 80.0 and critical_regressions == 0
 
         return {

@@ -1,11 +1,14 @@
 import json
 import logging
 from datetime import datetime, timezone
-from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from pathlib import Path, PureWindowsPath
+from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.config import settings
 from app.database import get_db
 from app.api.deps import verify_admin_access
 from app.models.feedback import BenchmarkCase, FewShotExample, SystemVersion, TaskFeedback
@@ -13,7 +16,6 @@ from app.models.task import EmailTask
 from app.models.tenant import Tenant
 from app.schemas.feedback import (
     FewShotCreateRequest,
-    FewShotResponse,
     FewShotUpdateRequest,
     SystemVersionReleaseRequest,
     TaskFeedbackReviewRequest,
@@ -31,6 +33,36 @@ def utc_now():
     return datetime.now(timezone.utc)
 
 
+def _parse_json_value(value: Any, fallback: Any) -> Any:
+    if value in (None, ""):
+        return fallback
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _safe_attachment_names(value: Any) -> List[str]:
+    paths = _parse_json_value(value, [])
+    if not isinstance(paths, list):
+        return []
+    names: List[str] = []
+    for raw_path in paths[:100]:
+        if not isinstance(raw_path, str):
+            continue
+        name = _safe_attachment_name(raw_path)
+        if name:
+            names.append(name)
+    return names
+
+
+def _safe_attachment_name(raw_path: str) -> str:
+    """Return a basename consistently for paths persisted on any operating system."""
+    return PureWindowsPath(raw_path).name
+
+
 # ==========================================
 # 1. Feedbacks Management & Audit
 # ==========================================
@@ -39,7 +71,11 @@ def utc_now():
 async def list_feedbacks(
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
-    status: Optional[str] = Query(None, description="状态过滤: PENDING, ACCEPTED, REJECTED, RESOLVED"),
+    status: Optional[str] = Query(
+        None,
+        pattern="^(PENDING|ACCEPTED|REJECTED|RESOLVED)$",
+        description="状态过滤: PENDING, ACCEPTED, REJECTED, RESOLVED",
+    ),
     tenant_id: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
@@ -110,7 +146,18 @@ async def get_feedback_detail(
     db: AsyncSession = Depends(get_db),
 ):
     stmt = (
-        select(TaskFeedback, Tenant.name.label("tenant_name"), EmailTask.mail_subject, EmailTask.input_type, EmailTask.created_at.label("task_time"))
+        select(
+            TaskFeedback,
+            Tenant.name.label("tenant_name"),
+            EmailTask.mail_subject,
+            EmailTask.input_type,
+            EmailTask.created_at.label("task_time"),
+            EmailTask.input_summary,
+            EmailTask.raw_input_json,
+            EmailTask.file_paths,
+            EmailTask.is_charged,
+            EmailTask.charged_amount,
+        )
         .outerjoin(Tenant, TaskFeedback.tenant_id == Tenant.id)
         .outerjoin(EmailTask, TaskFeedback.task_id == EmailTask.id)
         .where(TaskFeedback.id == feedback_id)
@@ -120,7 +167,21 @@ async def get_feedback_detail(
     if not row:
         raise HTTPException(status_code=404, detail="工单不存在")
 
-    fb, t_name, subject, input_type, task_time = row
+    (
+        fb,
+        t_name,
+        subject,
+        input_type,
+        task_time,
+        input_summary,
+        raw_input_json,
+        file_paths,
+        is_charged,
+        charged_amount,
+    ) = row
+
+    parsed_raw_input = _parse_json_value(raw_input_json, raw_input_json)
+    attachment_names = _safe_attachment_names(file_paths)
 
     return {
         "code": 0,
@@ -130,6 +191,12 @@ async def get_feedback_detail(
             "task_subject": subject or "-",
             "input_type": input_type or "-",
             "task_time": task_time.isoformat() if task_time else "-",
+            "input_summary": input_summary or "",
+            "raw_input_json": parsed_raw_input,
+            # Never expose server-local absolute storage paths in the browser.
+            "file_paths": attachment_names,
+            "is_charged": bool(is_charged),
+            "charged_amount": float(charged_amount or 0),
             "tenant_id": fb.tenant_id,
             "tenant_name": t_name or fb.tenant_id,
             "status": fb.status,
@@ -151,13 +218,82 @@ async def get_feedback_detail(
     }
 
 
+@router.get("/feedbacks/{feedback_id}/attachments/{filename}", summary="下载反馈工单附件")
+async def download_feedback_attachment(
+    feedback_id: str,
+    filename: str,
+    db: AsyncSession = Depends(get_db),
+):
+    # The route only accepts a basename.  The actual path is always recovered from
+    # the feedback's task record, never from a user-controlled path fragment.
+    if not filename or _safe_attachment_name(filename) != filename:
+        raise HTTPException(status_code=404, detail="附件不存在")
+
+    stmt = select(TaskFeedback.task_id).where(TaskFeedback.id == feedback_id)
+    res = await db.execute(stmt)
+    task_id = res.scalar_one_or_none()
+    if not task_id:
+        raise HTTPException(status_code=404, detail="工单不存在")
+
+    task_stmt = select(EmailTask.file_paths).where(EmailTask.id == task_id)
+    task_res = await db.execute(task_stmt)
+    file_paths = task_res.scalar_one_or_none() or []
+    if isinstance(file_paths, str):
+        file_paths = _parse_json_value(file_paths, [])
+    if not isinstance(file_paths, list):
+        raise HTTPException(status_code=404, detail="附件不存在")
+
+    uploads_root = settings.uploads_path.resolve()
+    for raw_path in file_paths:
+        if not isinstance(raw_path, str):
+            continue
+        stored_name = _safe_attachment_name(raw_path)
+        if stored_name != filename:
+            continue
+
+        # Prefer the persisted path.  The uploads-root fallback keeps attachments
+        # downloadable after moving a database between Windows/Linux containers,
+        # where the old absolute prefix is no longer meaningful.
+        candidates = [Path(raw_path)]
+        stored_parent_name = PureWindowsPath(raw_path).parent.name
+        if stored_parent_name.casefold() == uploads_root.name.casefold():
+            candidates.append(uploads_root / stored_name)
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                continue
+            if resolved.is_relative_to(uploads_root) and resolved.is_file():
+                return FileResponse(
+                    path=str(resolved),
+                    filename=stored_name,
+                    media_type="application/octet-stream",
+                )
+
+        logger.warning(
+            "Feedback attachment record points to a missing file: feedback_id=%s task_id=%s filename=%s",
+            feedback_id,
+            task_id,
+            stored_name,
+        )
+
+    raise HTTPException(status_code=404, detail="附件不存在")
+
+
 @router.post("/feedbacks/{feedback_id}/accept", summary="审核采纳反馈 (自动退费冲正 + 自动生成评测用例/Few-Shot)")
 async def accept_feedback(
     feedback_id: str,
     payload: TaskFeedbackReviewRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(TaskFeedback).where(TaskFeedback.id == feedback_id)
+    if payload.status != "ACCEPTED":
+        raise HTTPException(status_code=422, detail="采纳接口的 status 必须为 ACCEPTED")
+
+    stmt = (
+        select(TaskFeedback)
+        .where(TaskFeedback.id == feedback_id)
+        .with_for_update()
+    )
     res = await db.execute(stmt)
     fb = res.scalar_one_or_none()
     if not fb:
@@ -165,17 +301,31 @@ async def accept_feedback(
 
     if fb.status in ["ACCEPTED", "RESOLVED"]:
         return {"code": 0, "message": "该工单此前已被采纳", "data": {"status": fb.status}}
+    if fb.status != "PENDING":
+        raise HTTPException(status_code=409, detail=f"工单当前状态为 {fb.status}，不能采纳")
+    if not fb.diff_fields:
+        raise HTTPException(status_code=409, detail="反馈没有有效字段差异，不能采纳或退款")
+
+    task_stmt = select(EmailTask).where(EmailTask.id == fb.task_id)
+    task = (await db.execute(task_stmt)).scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=409, detail="关联抽取任务已不存在，无法审核")
 
     # 1. Financial Auto-Refund
     refund_tx = None
     if payload.auto_refund and not fb.is_refunded:
-        refund_tx = await BillingService.refund_task_deduction(
-            db=db,
-            tenant_id=fb.tenant_id,
-            task_id=fb.task_id,
-            operator="ADMIN",
-            reason=f"采纳反馈 [{feedback_id}] {payload.review_comment or ''}",
-        )
+        try:
+            refund_tx = await BillingService.refund_task_deduction(
+                db=db,
+                tenant_id=fb.tenant_id,
+                task_id=fb.task_id,
+                operator="ADMIN",
+                reason=f"采纳反馈 [{feedback_id}] {payload.review_comment or ''}",
+            )
+        except (RuntimeError, ValueError) as exc:
+            await db.rollback()
+            logger.error("Feedback %s refund aborted: %s", feedback_id, exc)
+            raise HTTPException(status_code=409, detail="退款校验失败，请先核对原始扣款流水") from exc
         if refund_tx:
             fb.is_refunded = True
             fb.refund_amount = refund_tx.amount
@@ -188,26 +338,28 @@ async def accept_feedback(
     fb.reviewed_at = utc_now()
 
     # 2. Convert to BenchmarkCase
-    if payload.create_benchmark:
-        task_stmt = select(EmailTask).where(EmailTask.id == fb.task_id)
-        task = (await db.execute(task_stmt)).scalar_one_or_none()
+    if payload.create_benchmark and fb.diff_fields and fb.corrected_result:
         bm = BenchmarkCase(
             feedback_id=fb.id,
             doc_type=payload.error_category or "GENERAL",
             title=f"纠错金标用例 (Task: {fb.task_id})",
-            input_text=(task.mail_subject + "\n" + (task.input_summary or "")) if task else "",
+            input_text=((task.mail_subject or "") + "\n" + (task.input_summary or "")).strip(),
             ground_truth=fb.corrected_result or {},
             is_active=True,
         )
         db.add(bm)
+        await db.flush()
         fb.is_benchmark = True
+        fb.benchmark_id = bm.id
 
     # 3. Convert to FewShot Example
-    if payload.create_few_shot:
-        task_stmt = select(EmailTask).where(EmailTask.id == fb.task_id)
-        task = (await db.execute(task_stmt)).scalar_one_or_none()
-        input_sample = (task.mail_subject + "\n" + (task.input_summary or "")) if task else "标准单证输入"
+    if payload.create_few_shot and fb.diff_fields and fb.corrected_result:
+        input_sample = ((task.mail_subject or "") + "\n" + (task.input_summary or "")).strip()
+        if not input_sample:
+            input_sample = "标准单证输入"
         fs = FewShotExample(
+            feedback_id=fb.id,
+            source_tenant_id=fb.tenant_id,
             doc_type=payload.error_category or "GENERAL",
             title=f"纠错样例: {fb.diff_fields[0] if fb.diff_fields else '海运字段纠错'}",
             input_excerpt=input_sample[:1000],
@@ -218,8 +370,12 @@ async def accept_feedback(
         db.add(fs)
         FewShotService.invalidate_cache()
 
-    await db.commit()
-    await db.refresh(fb)
+    try:
+        await db.commit()
+        await db.refresh(fb)
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="反馈已被其他审核请求处理，请刷新后重试") from exc
 
     return {
         "code": 0,
@@ -240,11 +396,21 @@ async def reject_feedback(
     payload: TaskFeedbackReviewRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(TaskFeedback).where(TaskFeedback.id == feedback_id)
+    if payload.status != "REJECTED":
+        raise HTTPException(status_code=422, detail="驳回接口的 status 必须为 REJECTED")
+
+    stmt = (
+        select(TaskFeedback)
+        .where(TaskFeedback.id == feedback_id)
+        .with_for_update()
+    )
     res = await db.execute(stmt)
     fb = res.scalar_one_or_none()
     if not fb:
         raise HTTPException(status_code=404, detail="工单不存在")
+
+    if fb.status != "PENDING":
+        return {"code": 0, "message": f"该工单已审核处理 ({fb.status})，无需重复操作", "data": {"status": fb.status}}
 
     fb.status = "REJECTED"
     fb.error_category = payload.error_category or "CLIENT_ERROR"
@@ -376,7 +542,17 @@ async def release_new_version(
 
     # Run quick benchmark evaluation for official version badge
     eval_res = await EvaluationService.run_benchmark_evaluation(db)
-    benchmark_score = f"{eval_res.get('overall_accuracy_percent', 100.0)}%"
+    if not eval_res.get("can_release", False):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "金标回归评测未通过，禁止发布版本",
+                "total_cases": eval_res.get("total_cases", 0),
+                "overall_accuracy_percent": eval_res.get("overall_accuracy_percent", 0),
+                "critical_regressions_count": eval_res.get("critical_regressions_count", 0),
+            },
+        )
+    benchmark_score = f"{eval_res.get('overall_accuracy_percent', 0.0)}%"
 
     # Resolve feedbacks
     resolved_count = 0
@@ -399,8 +575,12 @@ async def release_new_version(
         released_by="admin",
     )
     db.add(ver)
-    await db.commit()
-    await db.refresh(ver)
+    try:
+        await db.commit()
+        await db.refresh(ver)
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="版本号已被其他发布请求占用") from exc
 
     return {
         "code": 0,

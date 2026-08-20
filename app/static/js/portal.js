@@ -92,7 +92,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function portalFetch(url, options = {}) {
-    const headers = new Headers(options.headers || getAuthHeaders());
+    const headers = new Headers(getAuthHeaders());
+    new Headers(options.headers || {}).forEach((value, key) => headers.set(key, value));
     try {
       const response = await fetch(url, { ...options, headers });
       const refreshedToken = response.headers.get('X-Refreshed-Token');
@@ -103,7 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
           localStorage.setItem('cargo_portal_api_key', refreshedToken);
         }
       }
-      if ((response.status === 401 || response.status === 403) && !isRedirectingPortal) {
+      if (response.status === 401 && !isRedirectingPortal) {
         isRedirectingPortal = true;
         localStorage.removeItem('cargo_admin_token');
         localStorage.removeItem('cargo_portal_api_key');
@@ -464,6 +465,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentDetailTaskId = null;
   let currentTaskOriginalJson = {};
   let currentTaskEditedJson = {};
+  const invalidTaskFieldKeys = new Set();
 
   window.switchTaskDetailView = function(viewName) {
     const viewFields = document.getElementById('ptd-view-fields');
@@ -515,6 +517,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    invalidTaskFieldKeys.clear();
     const rowsHtml = Object.entries(jsonObj).map(([key, val]) => {
       const isComplex = typeof val === 'object' && val !== null;
       const displayVal = isComplex ? JSON.stringify(val, null, 2) : (val !== null && val !== undefined ? String(val) : '');
@@ -546,7 +549,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (typeof currentTaskOriginalJson[key] === 'object' && currentTaskOriginalJson[key] !== null) {
           try {
             newVal = JSON.parse(newVal);
-          } catch (_) {}
+            invalidTaskFieldKeys.delete(key);
+            e.target.setCustomValidity('');
+            e.target.style.borderColor = '';
+          } catch (_) {
+            invalidTaskFieldKeys.add(key);
+            e.target.setCustomValidity('请输入合法 JSON');
+            e.target.style.borderColor = '#ef4444';
+            return;
+          }
         }
         currentTaskEditedJson[key] = newVal;
         updateDiffCounter();
@@ -624,7 +635,7 @@ document.addEventListener('DOMContentLoaded', () => {
               } else {
                 feedbackBanner.style.background = 'rgba(245, 158, 11, 0.15)';
                 feedbackBanner.style.border = '1px solid rgba(245, 158, 11, 0.4)';
-                feedbackBanner.innerHTML = `<strong class="text-warning">⏳ 纠错反馈待审核</strong>: 您已提交纠错反馈 (包含 ${fb.diff_fields ? fb.diff_fields.length : 0} 处修改)，管理员核实确认后将自动退还调用费用。`;
+                feedbackBanner.innerHTML = `<strong class="text-warning">⏳ 纠错反馈待审核</strong>: 您已提交纠错反馈 (包含 ${fb.diff_fields ? fb.diff_fields.length : 0} 处修改)，管理员核实后，符合原始扣款条件的任务将退款。`;
               }
             } else {
               feedbackBanner.style.display = 'none';
@@ -644,6 +655,11 @@ document.addEventListener('DOMContentLoaded', () => {
   window.submitTaskFeedback = async function() {
     if (!currentDetailTaskId) return;
 
+    if (invalidTaskFieldKeys.size > 0) {
+      showToast('warning', `以下复合字段不是合法 JSON：${Array.from(invalidTaskFieldKeys).join(', ')}`);
+      return;
+    }
+
     let diffCount = 0;
     const allKeys = new Set([...Object.keys(currentTaskOriginalJson), ...Object.keys(currentTaskEditedJson)]);
     allKeys.forEach(k => {
@@ -662,7 +678,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const confirmed = await showConfirmModal({
       title: '提交纠错反馈确认',
-      message: `您修改了 ${diffCount} 个字段。提交后管理员将在后台审核核实，确认为系统错误后将自动原路退还本次调用费用并优化模型规则。是否确认提交？`,
+      message: `您修改了 ${diffCount} 个字段。提交后管理员将在后台审核；确认为系统错误且存在原始扣款流水时，将原路退还本次调用费用并进入优化流程。是否确认提交？`,
       confirmText: '立即提交反馈',
       cancelText: '再看看',
       type: 'warning',
@@ -1036,4 +1052,3 @@ document.addEventListener('DOMContentLoaded', () => {
   // Start initialization
   initPortal();
 });
-
