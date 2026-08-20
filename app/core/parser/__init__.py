@@ -7,6 +7,7 @@ from app.core.parser.eml_parser import parse_eml
 from app.core.parser.pdf_parser import parse_pdf
 from app.core.parser.excel_parser import parse_excel
 from app.core.parser.word_parser import parse_word
+from app.core.parser.doc_parser import parse_doc
 from app.core.parser.ocr_engine import extract_ocr_from_image
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,9 @@ def parse_single_file(file_path: Path) -> AttachmentInput:
         elif ext == ".docx":
             content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             text, tables, ocr_text = parse_word(file_path)
+        elif ext == ".doc":
+            content_type = "application/msword"
+            text, tables, ocr_text = parse_doc(file_path)
         elif ext in IMAGE_EXTENSIONS:
             content_type = f"image/{ext.lstrip('.')}"
             ocr_text = extract_ocr_from_image(file_path)

@@ -319,7 +319,7 @@
         <p>仅需三步即可完成生产环境对接：</p>
         <ol>
           <li><strong>注册开户</strong>：访问 <a href="/register" style="color:#ffffff; text-decoration:underline;">企业开户页面</a> 提交申请，获取唯一的 <code>API Key</code> 与 <code>Webhook Secret</code>；</li>
-          <li><strong>提交抽取</strong>：向 <code>/api/v1/extract/async</code> 提交订舱确认邮件正文或多模态附件（.eml, PDF, Excel）；</li>
+          <li><strong>提交抽取</strong>：向 <code>/api/v1/extract/async</code> 或 <code>/api/v1/extract/async/upload</code> 提交订舱确认邮件正文或多模态附件（支持 <strong>.eml, .pdf, .xlsx, .docx, .doc, 扫描图片</strong> 等全格式单证）；</li>
           <li><strong>接收通知</strong>：配置回调地址 <code>callback_url</code>，抽取成功后系统将自动以 HMAC-SHA256 签名方式将 57 个标准结构化字段推送到您的业务系统。</li>
         </ol>
       </section>
