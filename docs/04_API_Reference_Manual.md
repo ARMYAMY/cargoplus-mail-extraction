@@ -15,10 +15,11 @@ X-API-Key: cg_live_xxxxxxxx_yyyyyyyyyyyyyyyyyyyyyyyy
 ```
 
 ### 1.2 管理员管理端鉴权
-管理员调用管理端 API（`/api/admin/*`）时，需在请求头中传入管理员密钥：
+管理员登录后调用管理端 API（`/admin/*`）时，应在请求头中传入管理员会话令牌：
 ```http
-X-Admin-Secret: cargo-plus-admin-secret-2026
+Authorization: Bearer <ADMIN_SESSION_TOKEN>
 ```
+非生产环境或显式启用兼容开关时，也可使用 `X-Admin-Secret` 旧式鉴权。
 
 ---
 
@@ -217,7 +218,7 @@ X-Admin-Secret: cargo-plus-admin-secret-2026
 
 ---
 
-## 3. 管理端核心 API 接口 (`/api/admin`)
+## 3. 管理端核心 API 接口 (`/admin`)
 
 ### 3.1 大模型配置与动态探活接口
 
@@ -310,17 +311,35 @@ X-Admin-Secret: cargo-plus-admin-secret-2026
 
 | 接口路径 | 方法 | 功能描述 |
 | :--- | :--- | :--- |
-| `/api/admin/tenants` | `GET` | 查询所有租户列表（包含审核状态、余额、单价、并发上限） |
-| `/api/admin/tenants` | `POST` | 管理员直接开通新企业租户并分配初始秘钥 |
-| `/api/admin/tenants/{tenant_id}/status` | `PUT` | 审核通过/禁用租户 (`{"is_active": true}`) |
-| `/api/admin/tenants/{tenant_id}/recharge` | `POST` | 管理员为指定租户人工充值余额 (`{"amount": 500.00}`) |
-| `/api/admin/tenants/{tenant_id}/unit-price`| `PUT` | 动态修改租户单次调用单价 (`{"unit_price": 0.35}`) |
-| `/api/admin/tenants/{tenant_id}/concurrency`| `PUT` | 动态修改租户最大并发上限 (`{"max_concurrency": 25}`) |
-| `/api/admin/tasks` | `GET` | 分页全局检索所有抽取任务与状态 |
-| `/api/admin/tasks/{task_id}/retry` | `POST` | 重试失败任务 |
-| `/api/admin/billing/daily` | `GET` | 管理员全局日账单汇总（分页） |
-| `/api/admin/billing/transactions` | `GET` | 管理员全局财务扣费与充值流水（分页） |
-| `/api/admin/stats` | `GET` | 总控台大盘实时指标、今日消耗与近 14 天营收趋势 |
+| `/admin/tenants` | `GET` | 查询所有租户列表（包含审核状态、余额、单价、并发上限） |
+| `/admin/tenants` | `POST` | 管理员直接开通新企业租户并分配初始密钥 |
+| `/admin/tenants/{tenant_id}` | `PUT` | 修改租户名称、电话、单价、并发上限或启用状态 |
+| `/admin/tenants/{tenant_id}/keys` | `GET` | 查询指定租户名下所有 API Key 凭证与 Secret |
+| `/admin/tenants/{tenant_id}/keys` | `POST` | 为指定租户生成新的 API Key 凭证 |
+| `/admin/tenants/keys/{key_id}` | `DELETE` | 吊销指定 API Key |
+| `/admin/tenants/{tenant_id}/status?is_active=true` | `PUT` | 审核通过或禁用租户 |
+| `/admin/recharge/{tenant_id}` | `POST` | 管理员为指定租户人工充值余额 (`{"amount": 500.00}`) |
+| `/admin/tenants/{tenant_id}/unit-price`| `PUT` | 动态修改租户单次调用单价 (`{"unit_price": 0.35}`) |
+| `/admin/tasks` | `GET` | 分页全局检索所有抽取任务与状态 |
+| `/admin/tasks/statuses` | `POST` | 批量精确查询最多 100 个任务的状态 |
+| `/admin/tasks/{task_id}/retry` | `POST` | 重试未扣费且未预留资金的失败任务 |
+| `/admin/billing/transactions` | `GET` | 管理员全局财务扣费与充值流水（分页） |
+| `/admin/stats` | `GET` | 总控台大盘实时指标、今日消耗与近 14 天营收趋势 |
+
+---
+
+### 3.3 客户反馈工单与动态 Few-Shot 样本库接口
+
+| 接口路径 | 方法 | 功能描述 |
+| :--- | :--- | :--- |
+| `/admin/feedbacks` | `GET` | 分页查询客户纠错反馈工单列表（支持状态与租户过滤） |
+| `/admin/feedbacks/{feedback_id}` | `GET` | 查询工单详情，包含任务原始邮件主题与原始输入文本 |
+| `/admin/feedbacks/{feedback_id}/accept` | `POST` | 采纳工单并执行退款，支持一键沉淀为 Few-Shot 样本及金标评测用例 |
+| `/admin/feedbacks/{feedback_id}/reject` | `POST` | 驳回工单并填写驳回原因 |
+| `/admin/few-shots` | `GET` | 按优先级查询动态 Few-Shot 样本列表 |
+| `/admin/few-shots` | `POST` | 新增全局 Few-Shot 示例（支持局部 JSON 与优先级定义） |
+| `/admin/few-shots/{id}` | `PUT` | 更新 Few-Shot 示例（包括 `is_active` 启停状态） |
+| `/admin/few-shots/{id}` | `DELETE` | 删除指定 Few-Shot 示例 |
 
 ---
 
