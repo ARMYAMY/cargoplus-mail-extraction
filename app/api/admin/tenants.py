@@ -86,6 +86,7 @@ async def create_tenant(
         name="Default Live Key",
         key_prefix=prefix,
         key_hash=key_hash,
+        raw_key=raw_key,
         api_secret=secret,
     )
     db.add(api_key)
@@ -246,6 +247,7 @@ async def create_tenant_api_key(
         name=key_name,
         key_prefix=prefix,
         key_hash=key_hash,
+        raw_key=raw_key,
         api_secret=secret,
     )
     db.add(api_key)

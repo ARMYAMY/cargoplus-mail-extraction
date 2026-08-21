@@ -434,7 +434,7 @@
 
   <!-- Modal: Portal API Key & Integration -->
   <div class="modal" id="modal-portal-keys" role="dialog" aria-modal="true">
-    <div class="modal-dialog modal-lg">
+    <div class="modal-dialog modal-xl" style="max-width: 980px;">
       <div class="modal-header">
         <h3>🔑 企业 API 凭证与集成调用</h3>
         <button class="modal-close" type="button" onclick="closePortalModal('modal-portal-keys')" aria-label="关闭">&times;</button>
@@ -458,15 +458,15 @@
           </button>
         </div>
 
-        <div class="table-responsive" style="max-height:220px; overflow-y:auto; border:1px solid var(--portal-border); border-radius:10px; margin-bottom:16px;">
+        <div class="table-responsive" style="max-height:260px; overflow-y:auto; border:1px solid var(--portal-border); border-radius:10px; margin-bottom:16px;">
           <table class="data-table" id="table-portal-keys-list">
             <thead>
               <tr>
-                <th>密钥名称</th>
-                <th>API Key 前缀</th>
-                <th>Webhook Secret</th>
-                <th>状态</th>
-                <th>创建时间</th>
+                <th style="white-space:nowrap;">密钥名称</th>
+                <th style="white-space:nowrap;">API Key</th>
+                <th style="white-space:nowrap;">Webhook Secret</th>
+                <th style="white-space:nowrap; text-align:center;">状态</th>
+                <th style="white-space:nowrap;">创建时间</th>
               </tr>
             </thead>
             <tbody>
@@ -527,7 +527,7 @@
 
   <div class="toast-container" id="toast-container"></div>
 
-  <script src="/static/js/portal.js?v=20260820v50"></script>
+  <script src="/static/js/portal.js?v=20260821v53"></script>
 </body>
 </html>
 

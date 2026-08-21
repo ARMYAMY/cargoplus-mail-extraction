@@ -1,11 +1,13 @@
 import json
+from pathlib import PureWindowsPath
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.task import EmailTask
-from app.schemas.task import TaskDetailResponse, TaskListResponse
+from app.models.feedback import TaskFeedback
+from app.schemas.task import TaskDetailResponse, TaskFeedbackSummary, TaskListResponse
 from app.api.deps import verify_admin_access
 from app.services.billing_service import BillingService
 from app.services.queue_service import task_queue
@@ -13,7 +15,24 @@ from app.services.queue_service import task_queue
 router = APIRouter(prefix="/admin/tasks", dependencies=[Depends(verify_admin_access)])
 
 
-def _format_task_response(task: EmailTask) -> TaskDetailResponse:
+def _attachment_names(file_paths: Optional[str]) -> list[str]:
+    try:
+        paths = json.loads(file_paths) if isinstance(file_paths, str) else file_paths
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(paths, list):
+        return []
+    return [
+        name
+        for raw_path in paths[:20]
+        if isinstance(raw_path, str) and (name := PureWindowsPath(raw_path).name)
+    ]
+
+
+def _format_task_response(
+    task: EmailTask,
+    feedback: Optional[TaskFeedback] = None,
+) -> TaskDetailResponse:
     result_data = None
     if task.result_json:
         try:
@@ -40,6 +59,19 @@ def _format_task_response(task: EmailTask) -> TaskDetailResponse:
         created_at=task.created_at,
         started_at=task.started_at,
         completed_at=task.completed_at,
+        attachment_names=_attachment_names(task.file_paths),
+        feedback=(
+            TaskFeedbackSummary(
+                id=feedback.id,
+                status=feedback.status,
+                diff_fields_count=len(feedback.diff_fields or []),
+                is_refunded=feedback.is_refunded,
+                refund_amount=feedback.refund_amount or 0,
+                review_comment=feedback.review_comment,
+            )
+            if feedback
+            else None
+        ),
     )
 
 
@@ -81,6 +113,23 @@ async def list_all_tasks_admin(
         page_size=page_size,
         items=[_format_task_response(t) for t in tasks],
     )
+
+
+@router.get("/{task_id}", response_model=TaskDetailResponse, summary="管理员查看单条任务完整上下文")
+async def get_task_detail_admin(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    task = (
+        await db.execute(select(EmailTask).where(EmailTask.id == task_id))
+    ).scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    feedback = (
+        await db.execute(select(TaskFeedback).where(TaskFeedback.task_id == task_id))
+    ).scalar_one_or_none()
+    return _format_task_response(task, feedback)
 
 
 @router.post("/{task_id}/retry", summary="管理员手动重新触发重试任务")

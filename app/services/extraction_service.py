@@ -105,7 +105,7 @@ class ExtractionService:
                 if task.api_key_id:
                     key_stmt = key_stmt.where(ApiKey.id == task.api_key_id)
                 else:
-                    key_stmt = key_stmt.where(ApiKey.is_active == True)
+                    key_stmt = key_stmt.where(ApiKey.is_active.is_(True))
                 key_res = await db.execute(key_stmt)
                 active_key = key_res.scalars().first()
                 tenant_secret = active_key.api_secret if active_key else None
@@ -147,7 +147,10 @@ class ExtractionService:
             few_shot_snippet = ""
             try:
                 async with AsyncSessionLocal() as db_fs:
-                    few_shot_snippet = await FewShotService.build_few_shot_prompt_section(db_fs)
+                    few_shot_snippet = await FewShotService.build_few_shot_prompt_section(
+                        db_fs,
+                        tenant_id=tenant_id,
+                    )
             except Exception as fs_err:
                 logger.debug("FewShot prompt snippet loading skipped: %s", fs_err)
 
@@ -306,7 +309,10 @@ class ExtractionService:
         """
         few_shot_snippet = ""
         try:
-            few_shot_snippet = await FewShotService.build_few_shot_prompt_section(db)
+            few_shot_snippet = await FewShotService.build_few_shot_prompt_section(
+                db,
+                tenant_id=tenant_id,
+            )
         except Exception as fs_err:
             logger.debug("FewShot prompt snippet loading skipped: %s", fs_err)
 

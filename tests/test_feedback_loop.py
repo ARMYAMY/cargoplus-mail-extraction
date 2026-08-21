@@ -1,15 +1,17 @@
 import json
 from decimal import Decimal
+from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from app.main import app
 from app.database import AsyncSessionLocal, init_db
 from app.models.billing import BillingTransaction
-from app.models.feedback import BenchmarkCase, FewShotExample, SystemVersion, TaskFeedback
+from app.models.feedback import TaskFeedback
 from app.models.task import EmailTask
 from app.models.tenant import ApiKey, Tenant
 from app.services.auth_service import create_access_token, generate_api_key_and_secret, hash_password
+from app.services.extraction_service import ExtractionService
 
 
 @pytest.mark.asyncio
@@ -66,6 +68,18 @@ async def test_feedback_loop_end_to_end():
             charged_amount=Decimal("0.5000"),
         )
         db.add(task)
+        db.add(
+            BillingTransaction(
+                tenant_id=t_id,
+                task_id=task_id,
+                type="DEDUCTION",
+                amount=Decimal("0.5000"),
+                balance_before=Decimal("10.5000"),
+                balance_after=Decimal("10.0000"),
+                description="test deduction",
+                operator="TEST",
+            )
+        )
         await db.commit()
 
     tenant_token = create_access_token(
@@ -125,6 +139,8 @@ async def test_feedback_loop_end_to_end():
         assert res_admin_detail.status_code == 200
         detail_data = res_admin_detail.json()["data"]
         assert detail_data["corrected_result"]["BookingNo"] == "MAERSK99999"
+        assert detail_data["is_charged"] is True
+        assert detail_data["charged_amount"] == 0.5
 
         # 5. Admin accepts feedback (auto-refund + FewShot + Benchmark)
         res_accept = await client.post(
@@ -148,9 +164,37 @@ async def test_feedback_loop_end_to_end():
         async with AsyncSessionLocal() as db:
             t_after = (await db.execute(select(Tenant).where(Tenant.id == t_id))).scalar_one()
             assert t_after.balance == Decimal("10.5000")  # 10.0 + 0.5 refund
+            task_after = (await db.execute(select(EmailTask).where(EmailTask.id == task_id))).scalar_one()
+            assert task_after.is_charged is True  # Preserve the original charge audit fact.
             tx = (await db.execute(select(BillingTransaction).where(BillingTransaction.task_id == task_id, BillingTransaction.type == "REFUND"))).scalar_one_or_none()
             assert tx is not None
             assert tx.amount == Decimal("0.5000")
+
+        # Duplicate review requests are idempotent and cannot credit twice.
+        res_accept_again = await client.post(
+            f"/admin/feedbacks/{fb_id}/accept",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={
+                "status": "ACCEPTED",
+                "error_category": "PROMPT_LLM",
+                "auto_refund": True,
+                "create_few_shot": True,
+                "create_benchmark": True,
+            },
+        )
+        assert res_accept_again.status_code == 200
+        async with AsyncSessionLocal() as db:
+            t_after_retry = (await db.execute(select(Tenant).where(Tenant.id == t_id))).scalar_one()
+            refunds = (
+                await db.execute(
+                    select(BillingTransaction).where(
+                        BillingTransaction.task_id == task_id,
+                        BillingTransaction.type == "REFUND",
+                    )
+                )
+            ).scalars().all()
+            assert t_after_retry.balance == Decimal("10.5000")
+            assert len(refunds) == 1
 
         # 6. Admin tests Few-Shot list
         res_fs = await client.get(
@@ -162,25 +206,35 @@ async def test_feedback_loop_end_to_end():
         assert len(fs_items) >= 1
 
         # 7. Admin triggers Regression Evaluation
-        res_eval = await client.post(
-            "/admin/evaluation/run",
-            headers={"Authorization": f"Bearer {admin_token}"},
-        )
+        with patch.object(
+            ExtractionService,
+            "extract_mail_content",
+            new=AsyncMock(return_value=corrected),
+        ):
+            res_eval = await client.post(
+                "/admin/evaluation/run",
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
         assert res_eval.status_code == 200
         eval_data = res_eval.json()["data"]
         assert "overall_accuracy_percent" in eval_data
         assert "can_release" in eval_data
 
         # 8. Admin releases Version
-        res_release = await client.post(
-            "/admin/version/release",
-            headers={"Authorization": f"Bearer {admin_token}"},
-            json={
-                "version_tag": "v1.1.0-test",
-                "changelog": "优化目的港提取模型规则",
-                "mark_accepted_as_resolved": True,
-            },
-        )
+        with patch.object(
+            ExtractionService,
+            "extract_mail_content",
+            new=AsyncMock(return_value=corrected),
+        ):
+            res_release = await client.post(
+                "/admin/version/release",
+                headers={"Authorization": f"Bearer {admin_token}"},
+                json={
+                    "version_tag": "v1.1.0-test",
+                    "changelog": "优化目的港提取模型规则",
+                    "mark_accepted_as_resolved": True,
+                },
+            )
         assert res_release.status_code == 200, res_release.text
         rel_data = res_release.json()["data"]
         assert rel_data["version_tag"] == "v1.1.0-test"

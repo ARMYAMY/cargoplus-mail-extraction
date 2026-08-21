@@ -142,6 +142,7 @@ async def register_tenant(
         name="默认生产密钥",
         key_prefix=prefix,
         key_hash=key_hash,
+        raw_key=raw_key,
         api_secret=api_secret,
         is_active=True,
     )

@@ -28,7 +28,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     try {
-      const response = await fetch(url, { ...options, headers });
+      const response = await fetch(url, { ...options, headers, credentials: 'same-origin' });
 
       // 1. Sliding Session: Update token if backend returned refreshed token
       const refreshedToken = response.headers.get('X-Refreshed-Token');
@@ -50,6 +50,36 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) {
       throw err;
     }
+  }
+
+  async function downloadAdminAttachment(feedbackId, filename) {
+    const url = `/admin/feedbacks/${encodeURIComponent(feedbackId)}/attachments/${encodeURIComponent(filename)}`;
+    const response = await adminFetch(url, { method: 'GET' });
+    if (!response.ok) {
+      let detail = '';
+      try {
+        const body = await response.json();
+        detail = typeof body?.detail === 'string' ? body.detail : '';
+      } catch (_) {
+        // The proxy may return a plain-text or HTML error page.
+      }
+      throw new Error(detail || `服务返回 HTTP ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    if (blob.size === 0) {
+      throw new Error('服务器返回了空附件');
+    }
+    const blobUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    // WebView/Safari may not start reading the Blob until after this handler
+    // returns, so revoking synchronously can cancel an otherwise valid download.
+    window.setTimeout(() => window.URL.revokeObjectURL(blobUrl), 60_000);
   }
 
   // Tab Switching
@@ -993,23 +1023,41 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      tbody.innerHTML = keys.map(k => `
+      tbody.innerHTML = keys.map(k => {
+        const fullKey = k.raw_api_key || k.raw_key || k.key_prefix;
+        const displayKey = k.key_prefix ? `${k.key_prefix}...` : (fullKey ? `${fullKey.substring(0, 11)}...` : '-');
+        return `
         <tr>
-          <td><strong>${escapeHtml(k.name || '默认密钥')}</strong></td>
-          <td><code style="color:#38bdf8; font-size:0.8rem;">${escapeHtml(k.key_prefix)}...</code></td>
-          <td>
-            <span style="font-family:var(--font-mono); font-size:0.75rem; color:#fbbf24;">${escapeHtml(k.api_secret ? k.api_secret.substring(0, 10) + '...' : '-')}</span>
-            ${k.api_secret ? `<button type="button" class="btn btn-xs btn-secondary btn-copy-secret-val" data-secret="${escapeHtml(k.api_secret)}" style="margin-left:4px;" title="复制完整 Secret">复制</button>` : ''}
+          <td style="white-space:nowrap;"><strong>${escapeHtml(k.name || '默认密钥')}</strong></td>
+          <td style="white-space:nowrap;">
+            <div style="display:inline-flex; align-items:center; gap:8px;">
+              <code style="color:#38bdf8; font-size:0.82rem; font-family:var(--font-mono);">${escapeHtml(displayKey)}</code>
+              ${fullKey ? `<button type="button" class="btn btn-xs btn-secondary btn-copy-key-val" data-key="${escapeHtml(fullKey)}" title="复制完整 API Key">复制</button>` : ''}
+            </div>
           </td>
-          <td>${k.is_active ? '<span class="badge badge-success">正常</span>' : '<span class="badge badge-danger">已吊销</span>'}</td>
-          <td class="text-muted" style="font-size:0.75rem;">${formatDate(k.created_at)}</td>
-          <td>
+          <td style="white-space:nowrap;">
+            <div style="display:inline-flex; align-items:center; gap:8px;">
+              <span style="font-family:var(--font-mono); font-size:0.8rem; color:#fbbf24;">${escapeHtml(k.api_secret ? k.api_secret.substring(0, 10) + '...' : '-')}</span>
+              ${k.api_secret ? `<button type="button" class="btn btn-xs btn-secondary btn-copy-secret-val" data-secret="${escapeHtml(k.api_secret)}" title="复制完整 Secret">复制</button>` : ''}
+            </div>
+          </td>
+          <td style="white-space:nowrap; text-align:center;">${k.is_active ? '<span class="badge badge-success">正常</span>' : '<span class="badge badge-danger">已吊销</span>'}</td>
+          <td class="text-muted" style="font-size:0.75rem; white-space:nowrap;">${formatDate(k.created_at)}</td>
+          <td style="white-space:nowrap; text-align:center;">
             <button type="button" class="btn btn-xs btn-danger btn-revoke-key" data-id="${k.id}" title="吊销此密钥">吊销</button>
           </td>
         </tr>
-      `).join('');
+      `;
+      }).join('');
 
       // Wire copy buttons
+      document.querySelectorAll('.btn-copy-key-val').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const keyVal = btn.dataset.key || '';
+          copyToClipboard(keyVal, 'API Key 已成功复制！');
+        });
+      });
+
       document.querySelectorAll('.btn-copy-secret-val').forEach(btn => {
         btn.addEventListener('click', () => {
           const secret = btn.dataset.secret || '';
@@ -1186,28 +1234,109 @@ document.addEventListener('DOMContentLoaded', () => {
     loadTasksTable();
   }, 400));
 
-  async function showTaskDetailModal(taskId) {
-    try {
-      const res = await adminFetch(`/admin/tasks?search=${encodeURIComponent(taskId)}`);
-      if (!res.ok) throw new Error('Task fetch failed');
-      const data = await res.json();
-      const task = data.items.find((t) => t.id === taskId);
-      if (!task) return showToast('warning', '未找到对应任务详情');
+  function taskStatusBadge(status) {
+    const labels = {
+      PENDING: ['待处理', 'badge-warning'],
+      PROCESSING: ['处理中', 'badge-info'],
+      SUCCESS: ['成功', 'badge-success'],
+      FAILED: ['失败', 'badge-danger'],
+    };
+    const [label, className] = labels[status] || [status || '未知', 'badge-muted'];
+    return `<span class="badge ${className}">${escapeHtml(label)}</span>`;
+  }
 
+  function taskMoney(value) {
+    const amount = Number(value || 0);
+    return `¥${Number.isFinite(amount) ? amount.toFixed(2) : '0.00'}`;
+  }
+
+  function formatTaskTime(value) {
+    return value ? formatDate(value) : '-';
+  }
+
+  async function showTaskDetailModal(taskId, feedbackId = null) {
+    try {
+      const res = await adminFetch(`/admin/tasks/${encodeURIComponent(taskId)}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${res.status}`);
+      }
+      const task = await res.json();
+
+      document.getElementById('td-title').textContent = task.mail_subject || '任务详情';
+      document.getElementById('td-subtitle').textContent = `关联任务 · ${task.id}`;
       document.getElementById('td-id').textContent = task.id;
       document.getElementById('td-tenant').textContent = task.tenant_id;
-      document.getElementById('td-status-badge').innerHTML = task.status === 'SUCCESS' ? '<span class="badge badge-success">SUCCESS</span>' : `<span class="badge badge-danger">${task.status}</span>`;
+      document.getElementById('td-status-badge').innerHTML = taskStatusBadge(task.status);
+      document.getElementById('td-input-type').textContent = task.input_type || '未知输入类型';
+      document.getElementById('td-created').textContent = formatTaskTime(task.created_at);
+      document.getElementById('td-started').textContent = formatTaskTime(task.started_at);
+      document.getElementById('td-completed').textContent = formatTaskTime(task.completed_at);
       document.getElementById('td-duration').textContent = task.duration_ms ? `${task.duration_ms} ms` : '-';
-      document.getElementById('td-charge').textContent = `¥${parseFloat(task.charged_amount || 0).toFixed(2)} (已扣费: ${task.is_charged ? '是' : '否'})`;
-      document.getElementById('td-webhook').textContent = `${task.callback_status} (${task.callback_url || '未配置'})`;
+      document.getElementById('td-billing').textContent = task.is_charged
+        ? `已扣 ${taskMoney(task.charged_amount)}`
+        : '尚未扣费';
+      document.getElementById('td-reservation').textContent = task.is_reserved
+        ? `已预留 ${taskMoney(task.reserved_amount)}`
+        : '无预留资金';
+      document.getElementById('td-webhook-status').innerHTML = taskStatusBadge(task.callback_status || 'NONE');
+      document.getElementById('td-webhook-url').textContent = task.callback_url || '未配置';
+      document.getElementById('td-subject').textContent = task.mail_subject || '无主题';
+      document.getElementById('td-input-summary').textContent = task.input_summary || '暂无输入摘要';
+
+      const attachmentList = document.getElementById('td-attachments');
+      attachmentList.replaceChildren();
+      const attachmentNames = Array.isArray(task.attachment_names) ? task.attachment_names : [];
+      if (attachmentNames.length === 0) {
+        attachmentList.textContent = '无附件';
+      } else {
+        attachmentNames.forEach((name) => {
+          const chip = document.createElement('span');
+          chip.textContent = name;
+          chip.title = name;
+          attachmentList.appendChild(chip);
+        });
+      }
+
+      const taskFeedback = task.feedback;
+      const feedbackSummary = document.getElementById('td-feedback-summary');
+      const feedbackMeta = document.getElementById('td-feedback-meta');
+      const feedbackButton = document.getElementById('td-btn-open-feedback');
+      if (taskFeedback) {
+        const feedbackLabel = {
+          PENDING: '待审核',
+          ACCEPTED: taskFeedback.is_refunded ? '已采纳 / 已退款' : '已采纳',
+          RESOLVED: '已修复发布',
+          REJECTED: '已驳回',
+        }[taskFeedback.status] || taskFeedback.status;
+        feedbackSummary.textContent = feedbackLabel;
+        const refundText = taskFeedback.is_refunded
+          ? `，已退款 ${taskMoney(taskFeedback.refund_amount)}`
+          : '';
+        feedbackMeta.textContent = `${taskFeedback.diff_fields_count || 0} 处字段差异${refundText}`;
+        feedbackButton.style.display = '';
+        feedbackButton.onclick = () => {
+          closeModal('modal-task-detail');
+          window.openFeedbackDiffModal(feedbackId || taskFeedback.id);
+        };
+      } else {
+        feedbackSummary.textContent = '暂无反馈';
+        feedbackMeta.textContent = '该任务尚未关联纠错工单';
+        feedbackButton.style.display = 'none';
+        feedbackButton.onclick = null;
+      }
 
       const codeElem = document.getElementById('td-json-code');
+      const outputLabel = document.getElementById('td-output-label');
       if (task.result_json) {
         codeElem.textContent = JSON.stringify(task.result_json, null, 2);
+        outputLabel.textContent = 'Cargo V3 结构化结果';
       } else if (task.error_message) {
         codeElem.textContent = `// 任务失败错误日志:\n${task.error_message}`;
+        outputLabel.textContent = '失败原因';
       } else {
         codeElem.textContent = '// 任务处理中或无输出结果...';
+        outputLabel.textContent = '暂无结果';
       }
 
       openModal('modal-task-detail');
@@ -1222,6 +1351,10 @@ document.addEventListener('DOMContentLoaded', () => {
       copyToClipboard(document.getElementById('td-json-code')?.textContent || '');
     });
   }
+
+  window.viewTaskDetailAdmin = function(taskId, feedbackId) {
+    return showTaskDetailModal(taskId, feedbackId);
+  };
 
   // -------------------------------------------------------------
   // 4. Billing Logs Logic (with Real Admin API & Pagination)
@@ -2711,7 +2844,7 @@ MEAS: 68.000 CBM`;
           <tr>
             <td class="font-mono" style="font-size:0.8rem;"><strong>${it.id}</strong></td>
             <td><strong>${escapeHtml(it.tenant_name || it.tenant_id)}</strong></td>
-            <td class="font-mono" style="font-size:0.8rem;"><a href="javascript:void(0)" onclick="viewTaskDetailAdmin('${it.task_id}')">${it.task_id}</a></td>
+            <td class="font-mono" style="font-size:0.8rem;"><button type="button" class="task-context-link btn-feedback-task-context" data-task-id="${escapeHtml(it.task_id)}" data-feedback-id="${escapeHtml(it.id)}" title="查看任务执行、输入、计费和反馈上下文">${escapeHtml(it.task_id)}</button></td>
             <td><span class="badge badge-info">${it.diff_fields_count} 处变更</span></td>
             <td>${statusBadge}</td>
             <td>${refundText}</td>
@@ -2725,6 +2858,12 @@ MEAS: 68.000 CBM`;
           </tr>
         `;
       }).join('');
+
+      tbody.querySelectorAll('.btn-feedback-task-context').forEach((button) => {
+        button.addEventListener('click', () => {
+          showTaskDetailModal(button.dataset.taskId, button.dataset.feedbackId);
+        });
+      });
     } catch (err) {
       tbody.innerHTML = `<tr><td colspan="9" class="text-center text-danger py-8">加载工单失败: ${escapeHtml(err.message)}</td></tr>`;
     }
@@ -2746,10 +2885,77 @@ MEAS: 68.000 CBM`;
       document.getElementById('fd-notes').textContent = fb.notes || '客户未填写备注';
 
       let statusBadge = '<span class="badge badge-warning">待审核 (PENDING)</span>';
-      if (fb.status === 'ACCEPTED') statusBadge = '<span class="badge badge-success">已采纳/已退费</span>';
-      else if (fb.status === 'RESOLVED') statusBadge = `<span class="badge" style="background:#0284c7; color:#fff;">已发布解决 (${fb.resolved_version})</span>`;
+      if (fb.status === 'ACCEPTED') {
+        statusBadge = fb.is_refunded
+          ? '<span class="badge badge-success">已采纳/已退费</span>'
+          : '<span class="badge badge-success">已采纳/未退费</span>';
+      }
+      else if (fb.status === 'RESOLVED') statusBadge = `<span class="badge" style="background:#0284c7; color:#fff;">已发布解决 (${escapeHtml(fb.resolved_version || '最新')})</span>`;
       else if (fb.status === 'REJECTED') statusBadge = '<span class="badge badge-danger">已驳回 (REJECTED)</span>';
       document.getElementById('fd-status-badge').innerHTML = statusBadge;
+
+      // Populate Original Input Source panel
+      const inputTypeBadge = document.getElementById('fd-input-type-badge');
+      if (inputTypeBadge) inputTypeBadge.textContent = fb.input_type || '-';
+      const taskSubjectEl = document.getElementById('fd-task-subject');
+      if (taskSubjectEl) taskSubjectEl.textContent = fb.task_subject || '-';
+      const taskTimeEl = document.getElementById('fd-task-time');
+      if (taskTimeEl) taskTimeEl.textContent = fb.task_time || '-';
+
+      const filePathsRow = document.getElementById('fd-file-paths-row');
+      const filePathsEl = document.getElementById('fd-file-paths');
+      if (fb.file_paths && fb.file_paths.length > 0) {
+        if (filePathsEl) {
+          const fileNames = fb.file_paths
+            .filter(p => typeof p === 'string')
+            .map(p => String(p).split(/[\\/]/).pop())
+            .filter(Boolean);
+          filePathsEl.replaceChildren();
+          fileNames.forEach((name) => {
+            const downloadLink = document.createElement('a');
+            downloadLink.href = '#';
+            downloadLink.dataset.feedbackId = String(fb.id);
+            downloadLink.dataset.filename = name;
+            downloadLink.className = 'fd-download-link';
+            downloadLink.textContent = name;
+            downloadLink.style.color = '#38bdf8';
+            downloadLink.style.textDecoration = 'underline';
+            downloadLink.style.marginRight = '10px';
+            filePathsEl.appendChild(downloadLink);
+          });
+          if (filePathsRow) filePathsRow.style.display = fileNames.length > 0 ? '' : 'none';
+        }
+      } else {
+        if (filePathsRow) filePathsRow.style.display = 'none';
+        if (filePathsEl) filePathsEl.replaceChildren();
+      }
+
+      const inputSummaryEl = document.getElementById('fd-input-summary');
+      if (inputSummaryEl) {
+        let displayText = '';
+        if (fb.input_summary) {
+          displayText = fb.input_summary;
+        } else if (fb.raw_input_json) {
+          displayText = typeof fb.raw_input_json === 'string' ? fb.raw_input_json : JSON.stringify(fb.raw_input_json, null, 2);
+        } else {
+          displayText = '（无原始输入文本记录）';
+        }
+        inputSummaryEl.textContent = displayText;
+      }
+
+      const refundCheckbox = document.getElementById('fd-auto-refund');
+      const refundLabel = document.getElementById('fd-refund-label');
+      const chargedAmount = Number(fb.charged_amount || 0);
+      const canRefund = Boolean(fb.is_charged) && Number.isFinite(chargedAmount) && chargedAmount > 0;
+      if (refundCheckbox) {
+        refundCheckbox.disabled = !canRefund;
+        refundCheckbox.checked = canRefund && !fb.is_refunded;
+      }
+      if (refundLabel) {
+        refundLabel.textContent = canRefund
+          ? `自动执行本次调用扣费退款冲正 (¥${chargedAmount.toFixed(2)})`
+          : '该任务无有效原始扣款，不执行退款';
+      }
 
       const diffSet = new Set(fb.diff_fields || []);
 
@@ -2786,14 +2992,16 @@ MEAS: 68.000 CBM`;
       document.getElementById('fd-review-comment').value = fb.review_comment || '';
 
       const actionPanel = document.getElementById('fd-audit-action-panel');
+      const footerBtns = document.getElementById('fd-footer-audit-btns');
       const btnReject = document.getElementById('btn-fd-reject');
       const btnAccept = document.getElementById('btn-fd-accept');
 
-      if (fb.status === 'RESOLVED' || fb.status === 'ACCEPTED') {
-        if (actionPanel) actionPanel.style.opacity = '0.7';
-        if (btnAccept) btnAccept.disabled = true;
+      if (fb.status !== 'PENDING') {
+        if (actionPanel) actionPanel.style.display = 'none';
+        if (footerBtns) footerBtns.style.display = 'none';
       } else {
-        if (actionPanel) actionPanel.style.opacity = '1';
+        if (actionPanel) { actionPanel.style.display = ''; actionPanel.style.opacity = '1'; }
+        if (footerBtns) footerBtns.style.display = 'flex';
         if (btnAccept) btnAccept.disabled = false;
         if (btnReject) btnReject.disabled = false;
       }
@@ -2803,6 +3011,26 @@ MEAS: 68.000 CBM`;
       showToast('error', `加载 Diff 详情失败: ${err.message}`);
     }
   };
+
+  document.addEventListener('click', async (e) => {
+    const link = e.target.closest?.('.fd-download-link');
+    if (!link) return;
+    e.preventDefault();
+    const feedbackId = link.getAttribute('data-feedback-id');
+    const filename = link.getAttribute('data-filename');
+    if (!feedbackId || !filename || link.dataset.downloading === 'true') return;
+    link.dataset.downloading = 'true';
+    link.setAttribute('aria-disabled', 'true');
+    try {
+      await downloadAdminAttachment(feedbackId, filename);
+    } catch (err) {
+      console.error('附件下载失败', err);
+      showToast('error', `附件下载失败：${err.message || '请稍后重试'}`, '下载失败');
+    } finally {
+      delete link.dataset.downloading;
+      link.removeAttribute('aria-disabled');
+    }
+  });
 
   window.doAuditFeedback = async function(actionStatus) {
     if (!currentAuditFeedbackId) return;
@@ -2983,6 +3211,7 @@ MEAS: 68.000 CBM`;
     const btnRelease = document.getElementById('btn-open-release-modal');
 
     if (btn) btn.disabled = true;
+    if (btnRelease) btnRelease.disabled = true;
     if (label) label.textContent = '评测执行中 (正在并发重跑金标用例)...';
 
     try {
@@ -2995,7 +3224,7 @@ MEAS: 68.000 CBM`;
       document.getElementById('eval-total-cases').textContent = evalData.total_cases || 0;
 
       const accEl = document.getElementById('eval-overall-acc');
-      const accVal = evalData.overall_accuracy_percent ?? 100.0;
+      const accVal = evalData.overall_accuracy_percent ?? 0.0;
       accEl.textContent = `${accVal}%`;
       accEl.style.color = accVal >= 90 ? '#34d399' : (accVal >= 80 ? '#fbbf24' : '#f87171');
 
@@ -3023,6 +3252,7 @@ MEAS: 68.000 CBM`;
 
       showToast('success', '金标回归评测执行完毕！');
     } catch (err) {
+      if (btnRelease) btnRelease.disabled = true;
       showToast('error', '回归评测失败: ' + err.message);
     } finally {
       if (btn) btn.disabled = false;
@@ -3103,16 +3333,6 @@ MEAS: 68.000 CBM`;
       tbody.innerHTML = `<tr><td colspan="6" class="text-center text-danger py-6">加载版本历史失败: ${escapeHtml(err.message)}</td></tr>`;
     }
   };
-
-  window.viewTaskDetailAdmin = function(taskId) {
-    if (window.viewTaskDetail) {
-      window.viewTaskDetail(taskId);
-    } else {
-      showToast('info', `任务 ID: ${taskId}`);
-    }
-  };
-
-
 
   // Logout handler
   const btnAdminLogout = document.getElementById('btn-admin-logout');

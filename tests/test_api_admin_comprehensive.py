@@ -1,3 +1,4 @@
+import json
 import uuid
 from decimal import Decimal
 import pytest
@@ -5,9 +6,9 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from app.main import app
 from app.database import AsyncSessionLocal, init_db
-from app.models.tenant import Tenant, ApiKey
+from app.models.tenant import Tenant
 from app.models.task import EmailTask
-from app.models.billing import BillingTransaction
+from app.models.feedback import TaskFeedback
 from app.config import settings
 
 
@@ -98,8 +99,6 @@ async def test_admin_tenants_full_flow():
         assert res.status_code == 200
         keys = res.json()
         assert len(keys) >= 1
-        key_id = keys[0]["id"]
-
         # 6. Generate new key for tenant
         res = await client.post(
             f"/admin/tenants/{tenant_id}/keys?key_name=ERP_Key",
@@ -252,8 +251,21 @@ async def test_admin_tasks_monitor_and_retry():
             status="FAILED",
             error_message="Simulated OCR failure",
             mail_subject="Test Subject",
+            input_type="FILE",
+            input_summary="Uploaded booking document text",
+            file_paths=json.dumps([r"C:\\uploads\\booking.pdf"]),
         )
         db.add(task)
+        db.add(
+            TaskFeedback(
+                task_id=task_id,
+                tenant_id=t_id,
+                status="PENDING",
+                original_result={"BookingNo": "OLD"},
+                corrected_result={"BookingNo": "NEW"},
+                diff_fields=["BookingNo"],
+            )
+        )
         await db.commit()
 
     async with AsyncClient(transport=transport, base_url="http://test", follow_redirects=True) as client:
@@ -263,6 +275,17 @@ async def test_admin_tasks_monitor_and_retry():
         tasks = res.json()
         assert tasks["total"] >= 1
         assert any(item["id"] == task_id for item in tasks["items"])
+
+        # 1b. The direct detail endpoint returns the context needed by the
+        # feedback screen without relying on a fuzzy list search.
+        res = await client.get(f"/admin/tasks/{task_id}", headers=admin_headers)
+        assert res.status_code == 200
+        detail = res.json()
+        assert detail["id"] == task_id
+        assert detail["input_summary"] == "Uploaded booking document text"
+        assert detail["attachment_names"] == ["booking.pdf"]
+        assert detail["feedback"]["status"] == "PENDING"
+        assert detail["feedback"]["diff_fields_count"] == 1
 
         # 2. Filter by status
         res = await client.get("/admin/tasks?status=FAILED", headers=admin_headers)

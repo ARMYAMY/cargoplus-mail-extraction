@@ -55,6 +55,7 @@ async def generate_my_api_key(
         name=key_name,
         key_prefix=prefix,
         key_hash=key_hash,
+        raw_key=raw_key,
         api_secret=secret,
     )
     db.add(api_key)

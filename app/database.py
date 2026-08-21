@@ -89,6 +89,22 @@ async def init_db():
                 if column_name not in task_column_names:
                     await conn.execute(text(statement))
 
+            few_shot_columns = await conn.execute(text("PRAGMA table_info(few_shot_examples)"))
+            few_shot_column_names = {row[1] for row in few_shot_columns}
+            if "feedback_id" not in few_shot_column_names:
+                await conn.execute(
+                    text("ALTER TABLE few_shot_examples ADD COLUMN feedback_id VARCHAR(64)")
+                )
+            if "source_tenant_id" not in few_shot_column_names:
+                await conn.execute(
+                    text("ALTER TABLE few_shot_examples ADD COLUMN source_tenant_id VARCHAR(64)")
+                )
+
+            api_key_columns = await conn.execute(text("PRAGMA table_info(api_keys)"))
+            api_key_column_names = {row[1] for row in api_key_columns}
+            if "raw_key" not in api_key_column_names:
+                await conn.execute(text("ALTER TABLE api_keys ADD COLUMN raw_key VARCHAR(128)"))
+
             # These indexes make registration and task billing idempotent across processes.
             # Existing installations with duplicate legacy data are left untouched and emit a warning.
             for statement in (
@@ -100,6 +116,14 @@ async def init_db():
                 "ON email_tasks(tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL",
                 "CREATE INDEX IF NOT EXISTS ix_email_tasks_recovery "
                 "ON email_tasks(status, lease_expires_at, last_dispatched_at)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_task_feedback_task_id "
+                "ON task_feedbacks(task_id)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_benchmark_feedback_id "
+                "ON benchmark_cases(feedback_id) WHERE feedback_id IS NOT NULL",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_few_shot_feedback_id "
+                "ON few_shot_examples(feedback_id) WHERE feedback_id IS NOT NULL",
+                "CREATE INDEX IF NOT EXISTS ix_few_shot_examples_source_tenant_id "
+                "ON few_shot_examples(source_tenant_id)",
             ):
                 try:
                     await conn.execute(text(statement))
@@ -202,9 +226,33 @@ async def init_db():
                 "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS lease_owner VARCHAR(128)",
                 "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ",
                 "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS feedback_id VARCHAR(64) "
+                "REFERENCES task_feedbacks(id) ON DELETE SET NULL",
+                "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS source_tenant_id VARCHAR(64) "
+                "REFERENCES tenants(id) ON DELETE CASCADE",
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_task_tenant_idempotency "
                 "ON email_tasks(tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL",
                 "CREATE INDEX IF NOT EXISTS ix_email_tasks_recovery "
                 "ON email_tasks(status, lease_expires_at, last_dispatched_at)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_task_feedback_task_id "
+                "ON task_feedbacks(task_id)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_benchmark_feedback_id "
+                "ON benchmark_cases(feedback_id) WHERE feedback_id IS NOT NULL",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_few_shot_feedback_id "
+                "ON few_shot_examples(feedback_id) WHERE feedback_id IS NOT NULL",
+                "CREATE INDEX IF NOT EXISTS ix_few_shot_examples_source_tenant_id "
+                "ON few_shot_examples(source_tenant_id)",
             ):
-                await conn.execute(text(statement))
+                savepoint = await conn.begin_nested()
+                try:
+                    # A savepoint keeps one legacy duplicate from aborting every
+                    # later migration in PostgreSQL's transaction.
+                    await conn.execute(text(statement))
+                except IntegrityError as exc:
+                    await savepoint.rollback()
+                    logger.warning(
+                        "Could not install PostgreSQL uniqueness constraint; legacy duplicates must be reconciled: %s",
+                        exc,
+                    )
+                else:
+                    await savepoint.commit()

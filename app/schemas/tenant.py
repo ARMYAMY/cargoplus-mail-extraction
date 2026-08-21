@@ -95,11 +95,12 @@ class ApiKeyResponse(BaseModel):
     tenant_id: str
     name: str
     key_prefix: str
+    raw_key: Optional[str] = None
+    raw_api_key: Optional[str] = None
+    api_secret: Optional[str] = None
     is_active: bool
     last_used_at: Optional[datetime]
     created_at: datetime
-    raw_api_key: Optional[str] = None
-    api_secret: Optional[str] = None
 
 
 class TenantResponse(TenantBase):

@@ -61,6 +61,7 @@ async def seed_initial_demo_tenant():
                 name="Default Demo Key",
                 key_prefix=prefix,
                 key_hash=key_hash,
+                raw_key=raw_key,
                 api_secret=secret,
             )
             db.add(api_key)

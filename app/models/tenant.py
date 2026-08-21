@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Optional
 from sqlalchemy import CheckConstraint, Column, String, Boolean, DateTime, Numeric, Integer, ForeignKey
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -58,9 +59,14 @@ class ApiKey(Base):
     name = Column(String(128), nullable=False, default="Default Key")
     key_prefix = Column(String(16), nullable=False, index=True)
     key_hash = Column(String(128), nullable=False, unique=True, index=True)
+    raw_key = Column(String(128), nullable=True)  # Full raw API Key for user retrieval/copying
     api_secret = Column(String(128), nullable=False)  # Used for webhook HMAC signing
     is_active = Column(Boolean, nullable=False, default=True)
     last_used_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
     tenant = relationship("Tenant", back_populates="api_keys")
+
+    @property
+    def raw_api_key(self) -> Optional[str]:
+        return self.raw_key or self.key_prefix

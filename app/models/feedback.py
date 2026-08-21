@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     ForeignKey,
@@ -10,6 +11,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 from app.database import Base
@@ -21,6 +23,13 @@ def utc_now():
 
 class TaskFeedback(Base):
     __tablename__ = "task_feedbacks"
+    __table_args__ = (
+        UniqueConstraint("task_id", name="uq_task_feedback_task_id"),
+        CheckConstraint(
+            "status IN ('PENDING', 'ACCEPTED', 'REJECTED', 'RESOLVED')",
+            name="ck_task_feedback_status",
+        ),
+    )
 
     id = Column(
         String(64),
@@ -31,7 +40,6 @@ class TaskFeedback(Base):
         String(64),
         ForeignKey("email_tasks.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     tenant_id = Column(
         String(64),
@@ -77,19 +85,30 @@ class TaskFeedback(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, index=True)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
 
-    task = relationship("EmailTask", lazy="joined")
-    tenant = relationship("Tenant", lazy="joined")
+    # Avoid implicit OUTER JOINs on every feedback query. In particular,
+    # PostgreSQL cannot safely apply FOR UPDATE to the nullable side of those
+    # generated joins during concurrent review operations.
+    task = relationship("EmailTask", lazy="selectin")
+    tenant = relationship("Tenant", lazy="selectin")
 
 
 class BenchmarkCase(Base):
     __tablename__ = "benchmark_cases"
+    __table_args__ = (
+        UniqueConstraint("feedback_id", name="uq_benchmark_feedback_id"),
+        CheckConstraint("weight >= 1 AND weight <= 100", name="ck_benchmark_weight"),
+    )
 
     id = Column(
         String(64),
         primary_key=True,
         default=lambda: f"bm_{uuid.uuid4().hex[:14]}",
     )
-    feedback_id = Column(String(64), nullable=True, index=True)
+    feedback_id = Column(
+        String(64),
+        ForeignKey("task_feedbacks.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     doc_type = Column(String(64), nullable=False, default="GENERAL", index=True)
     title = Column(String(255), nullable=False, default="标准评测用例")
     
@@ -106,11 +125,26 @@ class BenchmarkCase(Base):
 
 class FewShotExample(Base):
     __tablename__ = "few_shot_examples"
+    __table_args__ = (
+        UniqueConstraint("feedback_id", name="uq_few_shot_feedback_id"),
+        CheckConstraint("priority >= 1 AND priority <= 100", name="ck_few_shot_priority"),
+    )
 
     id = Column(
         String(64),
         primary_key=True,
         default=lambda: f"fs_{uuid.uuid4().hex[:14]}",
+    )
+    feedback_id = Column(
+        String(64),
+        ForeignKey("task_feedbacks.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_tenant_id = Column(
+        String(64),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
     )
     doc_type = Column(String(64), nullable=False, default="GENERAL", index=True)
     title = Column(String(255), nullable=False, default="示例")

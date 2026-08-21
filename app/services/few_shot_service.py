@@ -1,76 +1,87 @@
 import json
 import logging
 from typing import Dict, List, Optional
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.feedback import FewShotExample
 
 logger = logging.getLogger(__name__)
 
-# In-memory cache for active few-shot examples: {doc_type: [examples]}
-_few_shot_cache: Optional[List[Dict]] = None
-
-
 class FewShotService:
     @staticmethod
     def invalidate_cache():
-        global _few_shot_cache
-        _few_shot_cache = None
-        logger.info("FewShot cache invalidated")
+        # Samples are queried on every extraction so changes are immediately
+        # visible to all API and Celery worker processes.
+        logger.debug("FewShot samples use database-backed reads; no local cache to invalidate")
 
     @classmethod
     async def get_active_examples(
         cls,
         db: AsyncSession,
+        tenant_id: Optional[str] = None,
         doc_type: Optional[str] = None,
         limit: int = 3,
     ) -> List[Dict]:
         """
         Retrieves top active Few-Shot examples sorted by priority.
-        Uses in-memory cache when available.
-        """
-        global _few_shot_cache
-        if _few_shot_cache is None:
-            try:
-                stmt = (
-                    select(FewShotExample)
-                    .where(FewShotExample.is_active.is_(True))
-                    .order_by(FewShotExample.priority.desc(), FewShotExample.created_at.desc())
-                )
-                res = await db.execute(stmt)
-                items = res.scalars().all()
-                _few_shot_cache = [
-                    {
-                        "id": item.id,
-                        "doc_type": item.doc_type,
-                        "title": item.title,
-                        "input_excerpt": item.input_excerpt,
-                        "expected_output": item.expected_output,
-                        "priority": item.priority,
-                    }
-                    for item in items
-                ]
-            except Exception as e:
-                logger.error("Failed to load few-shot examples from DB: %s", e)
-                return []
 
-        examples = _few_shot_cache or []
+        Global examples (source_tenant_id is NULL) are available to all tenants.
+        Examples created from tenant feedback are visible only to that tenant,
+        preventing customer document content from crossing tenant boundaries.
+        """
+        safe_limit = max(1, min(int(limit), 10))
+        stmt = select(FewShotExample).where(FewShotExample.is_active.is_(True))
+        if tenant_id:
+            stmt = stmt.where(
+                or_(
+                    FewShotExample.source_tenant_id.is_(None),
+                    FewShotExample.source_tenant_id == tenant_id,
+                )
+            )
+        else:
+            stmt = stmt.where(FewShotExample.source_tenant_id.is_(None))
         if doc_type and doc_type != "GENERAL":
-            matched = [ex for ex in examples if ex["doc_type"] == doc_type or ex["doc_type"] == "GENERAL"]
-            return matched[:limit]
-        return examples[:limit]
+            stmt = stmt.where(FewShotExample.doc_type.in_([doc_type, "GENERAL"]))
+        stmt = stmt.order_by(
+            FewShotExample.priority.desc(),
+            FewShotExample.created_at.desc(),
+        ).limit(safe_limit)
+
+        try:
+            items = (await db.execute(stmt)).scalars().all()
+        except Exception as exc:
+            logger.error("Failed to load few-shot examples from DB: %s", exc)
+            return []
+
+        return [
+            {
+                "id": item.id,
+                "doc_type": item.doc_type,
+                "title": item.title,
+                "input_excerpt": item.input_excerpt,
+                "expected_output": item.expected_output,
+                "priority": item.priority,
+            }
+            for item in items
+        ]
 
     @classmethod
     async def build_few_shot_prompt_section(
         cls,
         db: AsyncSession,
+        tenant_id: Optional[str] = None,
         doc_type: Optional[str] = None,
         max_examples: int = 2,
     ) -> str:
         """
         Formats active few-shot examples into an In-Context Learning prompt snippet.
         """
-        examples = await cls.get_active_examples(db, doc_type=doc_type, limit=max_examples)
+        examples = await cls.get_active_examples(
+            db,
+            tenant_id=tenant_id,
+            doc_type=doc_type,
+            limit=max_examples,
+        )
         if not examples:
             return ""
 
