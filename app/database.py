@@ -129,6 +129,36 @@ async def init_db():
                     await conn.execute(text(statement))
                 except IntegrityError as exc:
                     logger.warning("Could not install uniqueness index; legacy duplicates must be reconciled: %s", exc)
+        else:
+            # PostgreSQL schema migrations and indexes
+            pg_migrations = (
+                "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS password_hash VARCHAR(128);",
+                "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS reserved_balance NUMERIC(12, 4) NOT NULL DEFAULT 0;",
+                "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS reserved_amount NUMERIC(10, 4) NOT NULL DEFAULT 0;",
+                "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS is_reserved BOOLEAN NOT NULL DEFAULT FALSE;",
+                "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS api_key_id VARCHAR(64);",
+                "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(128);",
+                "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS last_dispatched_at TIMESTAMPTZ;",
+                "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS lease_owner VARCHAR(128);",
+                "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;",
+                "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;",
+                "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS feedback_id VARCHAR(64);",
+                "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS source_tenant_id VARCHAR(64);",
+                "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS raw_key VARCHAR(128);",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_tenants_contact_email ON tenants(lower(contact_email)) WHERE contact_email IS NOT NULL;",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_task_type ON billing_transactions(task_id, type) WHERE task_id IS NOT NULL;",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_task_tenant_idempotency ON email_tasks(tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL;",
+                "CREATE INDEX IF NOT EXISTS ix_email_tasks_recovery ON email_tasks(status, lease_expires_at, last_dispatched_at);",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_task_feedback_task_id ON task_feedbacks(task_id);",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_benchmark_feedback_id ON benchmark_cases(feedback_id) WHERE feedback_id IS NOT NULL;",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_few_shot_feedback_id ON few_shot_examples(feedback_id) WHERE feedback_id IS NOT NULL;",
+                "CREATE INDEX IF NOT EXISTS ix_few_shot_examples_source_tenant_id ON few_shot_examples(source_tenant_id);",
+            )
+            for stmt in pg_migrations:
+                try:
+                    await conn.execute(text(stmt))
+                except Exception as exc:
+                    logger.warning("Postgres schema update note: %s", exc)
 
             # SQLite does not enforce the declared NUMERIC precision. These triggers
             # are the final safety boundary for old processes and direct SQL writes.
