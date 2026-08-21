@@ -1969,33 +1969,54 @@ MEAS: 68.000 CBM`;
       statusBadge.textContent = '后台异步消费中...';
 
       // Poll tasks until completed
-      let completedCount = 0;
-      let successCount = 0;
+      const finishedTasksMap = new Map(); // taskId -> status
+      const totalSubmitted = submittedTaskIds.length;
+      const dynamicTimeoutMs = Math.max(300000, totalSubmitted * 6000); // at least 5 mins, 6s per task
+
       const pollTimer = setInterval(async () => {
         try {
-          const checkRes = await adminFetch(`/admin/tasks?page=1&page_size=100`);
+          const tenantParam = selectedTenantId ? `&tenant_id=${encodeURIComponent(selectedTenantId)}` : '';
+          const checkRes = await adminFetch(`/admin/tasks?page=1&page_size=100${tenantParam}`);
           if (!checkRes.ok) throw new Error(`任务状态查询失败 (HTTP ${checkRes.status})`);
           const checkData = await checkRes.json();
           const items = checkData.items || [];
 
-          completedCount = 0;
-          successCount = 0;
-          for (let tid of submittedTaskIds) {
-            const t = items.find((item) => item.id === tid);
-            if (t && (t.status === 'SUCCESS' || t.status === 'FAILED')) {
-              completedCount++;
-              if (t.status === 'SUCCESS') successCount++;
+          for (const it of items) {
+            if (submittedTaskIds.includes(it.id) && (it.status === 'SUCCESS' || it.status === 'FAILED')) {
+              finishedTasksMap.set(it.id, it.status);
             }
           }
 
-          const pct = Math.min(95, Math.round(30 + (completedCount / submittedTaskIds.length) * 65));
-          progressBar.style.width = `${pct}%`;
-          progressText.textContent = `正在消费中: ${completedCount} / ${submittedTaskIds.length} 完成 (成功: ${successCount})`;
+          // If there are more than 100 tasks, also fetch page 2
+          if (totalSubmitted > 80 && checkData.total > 100) {
+            try {
+              const p2Res = await adminFetch(`/admin/tasks?page=2&page_size=100${tenantParam}`);
+              if (p2Res.ok) {
+                const p2Data = await p2Res.json();
+                for (const it of (p2Data.items || [])) {
+                  if (submittedTaskIds.includes(it.id) && (it.status === 'SUCCESS' || it.status === 'FAILED')) {
+                    finishedTasksMap.set(it.id, it.status);
+                  }
+                }
+              }
+            } catch (_) {}
+          }
 
-          const timedOut = Date.now() - startTime > 120000;
-          if (completedCount >= submittedTaskIds.length || timedOut) {
+          const completedCount = finishedTasksMap.size;
+          let successCount = 0;
+          for (const s of finishedTasksMap.values()) {
+            if (s === 'SUCCESS') successCount++;
+          }
+
+          const pct = Math.min(95, Math.round(30 + (completedCount / totalSubmitted) * 65));
+          progressBar.style.width = `${pct}%`;
+          progressText.textContent = `正在消费中: ${completedCount} / ${totalSubmitted} 完成 (成功: ${successCount})`;
+
+          const elapsedMs = Date.now() - startTime;
+          const timedOut = elapsedMs > dynamicTimeoutMs;
+          if (completedCount >= totalSubmitted || timedOut) {
             clearInterval(pollTimer);
-            const totalElapsedSec = ((Date.now() - startTime) / 1000).toFixed(2);
+            const totalElapsedSec = (elapsedMs / 1000).toFixed(2);
             progressBar.style.width = '100%';
             statusBadge.textContent = timedOut ? '压测超时' : '压测完成';
             statusBadge.className = timedOut ? 'text-warning' : 'text-success';
@@ -2003,13 +2024,13 @@ MEAS: 68.000 CBM`;
 
             logText += `\n========================================\n`;
             logText += `📊 并发压测完成总结报告:\n`;
-            logText += `总提交任务: ${submittedTaskIds.length}\n`;
+            logText += `总提交任务: ${totalSubmitted}\n`;
             logText += `提交失败数: ${failedSubmissionCount}\n`;
-            logText += `成功完成数: ${successCount} (${((successCount/submittedTaskIds.length)*100).toFixed(1)}%)\n`;
+            logText += `成功完成数: ${successCount} (${((successCount / totalSubmitted) * 100).toFixed(1)}%)\n`;
             logText += `总耗时: ${totalElapsedSec} 秒\n`;
-            logText += `吞吐率 (TPS): ${(submittedTaskIds.length / totalElapsedSec).toFixed(2)} 封/秒\n`;
-            logText += `折合日处理量: ${((submittedTaskIds.length / totalElapsedSec) * 86400).toFixed(0)} 封/天\n`;
-            const unitPrice = Number(selectedTenant.unit_price);
+            logText += `吞吐率 (TPS): ${(totalSubmitted / totalElapsedSec).toFixed(2)} 封/秒\n`;
+            logText += `折合日处理量: ${((totalSubmitted / totalElapsedSec) * 86400).toFixed(0)} 封/天\n`;
+            const unitPrice = Number(selectedTenant.unit_price || 0.5);
             logText += `扣费对账: ¥${(successCount * unitPrice).toFixed(2)} (成功 ${successCount} 次 × ${unitPrice.toFixed(2)} 元)\n`;
             logText += `========================================\n`;
             liveLog.textContent = logText;
