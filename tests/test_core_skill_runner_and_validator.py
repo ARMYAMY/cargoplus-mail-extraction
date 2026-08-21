@@ -131,3 +131,37 @@ async def test_skill_runner_flow_and_correction():
         mock_post_retry.side_effect = [bad_json_response, fixed_json_response]
         result_fixed = await runner.extract_draft_json(payload)
         assert result_fixed["ShipperName"] == "FIXED_CORP"
+
+    # 5. Test empty content retry then success
+    empty_resp = MagicMock()
+    empty_resp.status_code = 200
+    empty_resp.json.return_value = {"choices": [{"message": {"content": ""}}]}
+
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post_empty:
+        mock_post_empty.side_effect = [empty_resp, mock_response]
+        res_empty_retry = await runner.extract_draft_json(payload)
+        assert res_empty_retry["POL"] == "NINGBO"
+
+    # 6. Test conversational prefix without code fences
+    conversational_resp = MagicMock()
+    conversational_resp.status_code = 200
+    conversational_resp.json.return_value = {
+        "choices": [{"message": {"content": 'Here is the extracted data:\n{"POL": "SHANGHAI", "POD": "ROTTERDAM"}\nHope this helps!'}}]
+    }
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post_conv:
+        mock_post_conv.return_value = conversational_resp
+        res_conv = await runner.extract_draft_json(payload)
+        assert res_conv["POL"] == "SHANGHAI"
+        assert res_conv["POD"] == "ROTTERDAM"
+
+    # 7. Test unparseable content fallback to empty dict
+    garbage_resp = MagicMock()
+    garbage_resp.status_code = 200
+    garbage_resp.json.return_value = {
+        "choices": [{"message": {"content": "Sorry, I am not able to parse this email."}}]
+    }
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post_garbage:
+        mock_post_garbage.side_effect = [garbage_resp, garbage_resp]
+        res_garbage = await runner.extract_draft_json(payload)
+        assert res_garbage == {}
+
