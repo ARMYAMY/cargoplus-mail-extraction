@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     LLM_MAX_RETRIES: int = Field(default=2, ge=0, le=10)
 
     # Multimodal Vision Model Settings (Shares LLM_BASE_URL & LLM_API_KEY)
-    VISION_LLM_ENABLED: bool = False
+    VISION_LLM_ENABLED: bool = True
     VISION_LLM_MODEL: str = "qwen3.8-27b"
     VISION_LLM_TIMEOUT_SECONDS: int = Field(default=30, ge=5, le=300)
     VISION_MAX_IMAGES_PER_TASK: int = Field(default=5, ge=1, le=20)
