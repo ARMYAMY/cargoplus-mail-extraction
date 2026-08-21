@@ -919,6 +919,230 @@ textarea.form-control {
   background: rgba(10, 6, 8, 0.8);
 }
 
+/* =========================================================
+   Admin task context modal
+   ========================================================= */
+.task-detail-dialog {
+  max-width: 980px;
+}
+
+.task-detail-header {
+  align-items: flex-start;
+}
+
+.task-detail-eyebrow,
+.task-detail-subtitle {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.task-detail-eyebrow {
+  color: var(--success);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.task-detail-subtitle {
+  margin-top: 4px;
+  max-width: 760px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-detail-body {
+  display: grid;
+  gap: 20px;
+}
+
+.task-summary-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr;
+}
+
+.task-summary-card,
+.task-detail-section {
+  background: var(--bg-surface-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.task-summary-card {
+  display: grid;
+  gap: 5px;
+  min-height: 112px;
+  padding: 16px;
+}
+
+.task-feedback-card {
+  border-color: rgba(52, 211, 153, 0.28);
+}
+
+.task-summary-label,
+.task-summary-hint,
+.task-content-block > span,
+.task-meta-grid dt {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.task-summary-value {
+  color: var(--text-primary);
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.task-detail-section {
+  padding: 18px;
+}
+
+.task-detail-section-heading {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.task-detail-section-heading h4 {
+  color: var(--text-primary);
+  font-size: 0.95rem;
+}
+
+.task-meta-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr;
+  margin-bottom: 16px;
+}
+
+.task-meta-grid div {
+  background: rgba(255, 255, 255, 0.025);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+.task-meta-grid dd {
+  color: var(--text-primary);
+  font-size: 0.83rem;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+.task-content-block {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.task-content-block strong {
+  color: var(--text-primary);
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
+}
+
+.task-input-preview,
+.task-webhook-url {
+  background: rgba(0, 0, 0, 0.24);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  line-height: 1.55;
+  max-height: 140px;
+  overflow: auto;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.task-webhook-url {
+  color: var(--text-secondary);
+}
+
+.task-attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-attachment-list span {
+  background: var(--accent-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 5px 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-output-viewer {
+  max-height: 300px;
+}
+
+.task-context-link {
+  background: transparent;
+  border: 0;
+  color: var(--success);
+  cursor: pointer;
+  font: inherit;
+  max-width: 180px;
+  overflow: hidden;
+  padding: 2px 0;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: rgba(52, 211, 153, 0.45);
+  text-underline-offset: 3px;
+  text-overflow: ellipsis;
+  transition: color var(--transition-fast), text-decoration-color var(--transition-fast);
+  white-space: nowrap;
+}
+
+.task-context-link:hover {
+  color: var(--text-primary);
+  text-decoration-color: var(--text-primary);
+}
+
+.task-context-link:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--success);
+  outline-offset: 3px;
+}
+
+.task-detail-footer {
+  flex-wrap: wrap;
+}
+
+@media (min-width: 640px) {
+  .task-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .task-meta-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 639px) {
+  .task-detail-subtitle {
+    white-space: normal;
+  }
+
+  .task-detail-section,
+  .task-summary-card {
+    padding: 14px;
+  }
+}
+
 /* Ultra-Premium Toast Notification System */
 .toast-container {
   position: fixed;

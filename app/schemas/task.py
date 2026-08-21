@@ -58,6 +58,17 @@ class TaskAsyncResponse(BaseModel):
     created_at: datetime
 
 
+class TaskFeedbackSummary(BaseModel):
+    """Feedback state shown to administrators alongside a task."""
+
+    id: str
+    status: str
+    diff_fields_count: int = 0
+    is_refunded: bool = False
+    refund_amount: Decimal = Decimal("0")
+    review_comment: Optional[str] = None
+
+
 class TaskDetailResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -82,6 +93,8 @@ class TaskDetailResponse(BaseModel):
     last_dispatched_at: Optional[datetime] = None
     lease_expires_at: Optional[datetime] = None
     attempt_count: int = 0
+    attachment_names: List[str] = Field(default_factory=list)
+    feedback: Optional[TaskFeedbackSummary] = None
 
 
 class TaskListResponse(BaseModel):

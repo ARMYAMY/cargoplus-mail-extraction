@@ -790,18 +790,29 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      tbody.innerHTML = keys.map(k => `
+      tbody.innerHTML = keys.map(k => {
+        const fullKey = k.raw_api_key || k.raw_key || k.key_prefix;
+        const displayKey = k.key_prefix ? `${k.key_prefix}...` : (fullKey ? `${fullKey.substring(0, 11)}...` : '-');
+        return `
         <tr>
-          <td><strong>${escapeHtml(k.name || '默认密钥')}</strong></td>
-          <td><code style="color:#38bdf8; font-size:0.8rem;">${escapeHtml(k.key_prefix)}...</code></td>
-          <td>
-            <span style="font-family:var(--font-mono); font-size:0.75rem; color:#fbbf24;">${escapeHtml(k.api_secret ? k.api_secret.substring(0, 10) + '...' : '-')}</span>
-            ${k.api_secret ? `<button type="button" class="btn btn-xs btn-secondary" onclick="copyPortalText('${k.api_secret}')" style="margin-left:4px;" title="复制完整 Webhook Secret">复制</button>` : ''}
+          <td style="white-space:nowrap;"><strong>${escapeHtml(k.name || '默认密钥')}</strong></td>
+          <td style="white-space:nowrap;">
+            <div style="display:inline-flex; align-items:center; gap:8px;">
+              <code style="color:#38bdf8; font-size:0.82rem; font-family:var(--font-mono);">${escapeHtml(displayKey)}</code>
+              ${fullKey ? `<button type="button" class="btn btn-xs btn-secondary" onclick="copyPortalText('${escapeHtml(fullKey)}')" title="复制完整 API Key">复制</button>` : ''}
+            </div>
           </td>
-          <td>${k.is_active ? '<span class="badge badge-success">正常</span>' : '<span class="badge badge-danger">已禁用</span>'}</td>
-          <td class="text-muted" style="font-size:0.75rem;">${formatDate(k.created_at)}</td>
+          <td style="white-space:nowrap;">
+            <div style="display:inline-flex; align-items:center; gap:8px;">
+              <span style="font-family:var(--font-mono); font-size:0.8rem; color:#fbbf24;">${escapeHtml(k.api_secret ? k.api_secret.substring(0, 10) + '...' : '-')}</span>
+              ${k.api_secret ? `<button type="button" class="btn btn-xs btn-secondary" onclick="copyPortalText('${escapeHtml(k.api_secret)}')" title="复制完整 Webhook Secret">复制</button>` : ''}
+            </div>
+          </td>
+          <td style="white-space:nowrap; text-align:center;">${k.is_active ? '<span class="badge badge-success">正常</span>' : '<span class="badge badge-danger">已禁用</span>'}</td>
+          <td class="text-muted" style="font-size:0.75rem; white-space:nowrap;">${formatDate(k.created_at)}</td>
         </tr>
-      `).join('');
+      `;
+      }).join('');
     } catch (err) {
       tbody.innerHTML = `<tr><td colspan="5" class="text-center text-danger py-4">加载失败: ${escapeHtml(err.message)}</td></tr>`;
     }

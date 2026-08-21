@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/css/app.css?v=20260820v60">
+  <link rel="stylesheet" href="/static/css/app.css?v=20260821v61">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" integrity="sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg/P5HG5lF1urn4" crossorigin="anonymous"></script>
 
   <script>
@@ -1248,7 +1248,7 @@ FREIGHT TERM: PREPAID`;
 
   <!-- Modal: Add / Edit Few-Shot Example -->
   <div class="modal" id="modal-few-shot-edit" role="dialog" aria-modal="true">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-lg" style="max-width: 680px;">
       <div class="modal-header">
         <h3 id="fse-title">新增 Few-Shot 少样本示例</h3>
         <button class="modal-close" data-close="modal-few-shot-edit">&times;</button>
@@ -1262,12 +1262,23 @@ FREIGHT TERM: PREPAID`;
           </div>
           <div class="form-row">
             <div class="form-group col-6">
-              <label>单证类型:</label>
-              <input type="text" class="form-control" id="fse-doctype" value="GENERAL" placeholder="GENERAL">
+              <label>单证类型 (适用场景):</label>
+              <select class="form-control" id="fse-doctype">
+                <option value="GENERAL">🌐 GENERAL (通用全部单证)</option>
+                <option value="BL">🚢 BL (海运提单 Bill of Lading)</option>
+                <option value="SO">📋 SO / BOOKING (订舱确认书)</option>
+                <option value="AWB">✈️ AWB (空运运单 Air Waybill)</option>
+                <option value="ARRIVAL_NOTICE">📬 ARRIVAL_NOTICE (到港通知)</option>
+                <option value="PACKING_LIST">📦 PACKING_LIST (装箱单)</option>
+                <option value="INVOICE">💰 INVOICE (商业发票)</option>
+                <option value="CUSTOMS">📑 CUSTOMS (报关单据)</option>
+              </select>
+              <small style="display:block; margin-top:4px; font-size:0.72rem; color:var(--text-muted);">选择 GENERAL 表示对所有解析任务通用；选具体类型则优先匹配对应单证。</small>
             </div>
             <div class="form-group col-6">
               <label>优先级 (1-100):</label>
               <input type="number" class="form-control font-mono" id="fse-priority" value="20" min="1" max="100">
+              <small style="display:block; margin-top:4px; font-size:0.72rem; color:var(--text-muted);">数值越大越优先注入 Prompt 供大模型参考 (默认 20)。</small>
             </div>
           </div>
           <div class="form-group">
@@ -1481,7 +1492,7 @@ FREIGHT TERM: PREPAID`;
 
   <!-- Modal: API Key Management -->
   <div class="modal" id="modal-manage-keys">
-    <div class="modal-dialog modal-lg">
+    <div class="modal-dialog modal-xl" style="max-width: 980px;">
       <div class="modal-header">
         <h3>🔑 租户 API Key 凭证与调用集成</h3>
         <button type="button" class="modal-close" onclick="closeModal('modal-manage-keys')">&times;</button>
@@ -1512,16 +1523,16 @@ FREIGHT TERM: PREPAID`;
         </div>
 
         <div style="margin-bottom:8px; font-weight:600; font-size:0.85rem; color:var(--text-secondary);">现有 API 密钥列表:</div>
-        <div class="table-responsive" style="max-height:220px; overflow-y:auto; border:1px solid rgba(255,255,255,0.08); border-radius:10px; margin-bottom:16px;">
+        <div class="table-responsive" style="max-height:260px; overflow-y:auto; border:1px solid rgba(255,255,255,0.08); border-radius:10px; margin-bottom:16px;">
           <table class="data-table" id="table-tenant-keys">
             <thead>
               <tr>
-                <th>密钥名称</th>
-                <th>API Key 前缀</th>
-                <th>Webhook 验签 Secret</th>
-                <th>状态</th>
-                <th>创建时间</th>
-                <th>操作</th>
+                <th style="white-space:nowrap;">密钥名称</th>
+                <th style="white-space:nowrap;">API Key</th>
+                <th style="white-space:nowrap;">Webhook 验签 Secret</th>
+                <th style="white-space:nowrap; text-align:center;">状态</th>
+                <th style="white-space:nowrap;">创建时间</th>
+                <th style="white-space:nowrap; text-align:center;">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -1545,31 +1556,81 @@ FREIGHT TERM: PREPAID`;
   </div>
 
 
-  <!-- Modal: Task Details & JSON Inspector -->
-  <div class="modal" id="modal-task-detail">
-    <div class="modal-dialog modal-lg">
-      <div class="modal-header">
-        <h3 id="td-title">任务详情</h3>
-        <button class="modal-close" data-close="modal-task-detail">&times;</button>
-      </div>
-      <div class="modal-body">
-        <div class="task-info-grid">
-          <div class="info-item"><span>任务ID:</span><strong id="td-id"></strong></div>
-          <div class="info-item"><span>租户ID:</span><strong id="td-tenant"></strong></div>
-          <div class="info-item"><span>状态:</span><span id="td-status-badge"></span></div>
-          <div class="info-item"><span>耗时:</span><strong id="td-duration"></strong></div>
-          <div class="info-item"><span>扣费金额:</span><strong id="td-charge"></strong></div>
-          <div class="info-item"><span>Webhook 回调:</span><span id="td-webhook"></span></div>
+  <!-- Modal: Admin Task Context -->
+  <div class="modal" id="modal-task-detail" role="dialog" aria-modal="true" aria-labelledby="td-title">
+    <div class="modal-dialog modal-lg task-detail-dialog">
+      <div class="modal-header task-detail-header">
+        <div>
+          <p class="task-detail-eyebrow">关联任务上下文</p>
+          <h3 id="td-title">任务详情</h3>
+          <p id="td-subtitle" class="task-detail-subtitle"></p>
         </div>
-        <div class="form-group mt-4">
-          <label>V3 结构化抽取 JSON 结果:</label>
-          <div class="json-viewer-container" style="max-height: 400px;">
+        <button class="modal-close" data-close="modal-task-detail" aria-label="关闭任务详情">&times;</button>
+      </div>
+      <div class="modal-body task-detail-body">
+        <section class="task-summary-grid" aria-label="任务概览">
+          <div class="task-summary-card">
+            <span class="task-summary-label">执行状态</span>
+            <span id="td-status-badge"></span>
+            <strong id="td-duration" class="task-summary-value">-</strong>
+            <span class="task-summary-hint">执行耗时</span>
+          </div>
+          <div class="task-summary-card">
+            <span class="task-summary-label">计费状态</span>
+            <strong id="td-billing" class="task-summary-value">-</strong>
+            <span id="td-reservation" class="task-summary-hint">-</span>
+          </div>
+          <div class="task-summary-card task-feedback-card">
+            <span class="task-summary-label">纠错反馈</span>
+            <strong id="td-feedback-summary" class="task-summary-value">暂无反馈</strong>
+            <span id="td-feedback-meta" class="task-summary-hint">该任务尚未关联纠错工单</span>
+          </div>
+        </section>
+
+        <section class="task-detail-section" aria-labelledby="td-context-heading">
+          <div class="task-detail-section-heading">
+            <h4 id="td-context-heading">任务上下文</h4>
+            <span id="td-input-type" class="badge badge-muted">-</span>
+          </div>
+          <dl class="task-meta-grid">
+            <div><dt>任务 ID</dt><dd id="td-id" class="font-mono"></dd></div>
+            <div><dt>所属租户</dt><dd id="td-tenant" class="font-mono"></dd></div>
+            <div><dt>创建时间</dt><dd id="td-created">-</dd></div>
+            <div><dt>开始时间</dt><dd id="td-started">-</dd></div>
+            <div><dt>完成时间</dt><dd id="td-completed">-</dd></div>
+            <div><dt>回调状态</dt><dd id="td-webhook-status">-</dd></div>
+          </dl>
+          <div class="task-content-block">
+            <span>邮件主题</span>
+            <strong id="td-subject">-</strong>
+          </div>
+          <div class="task-content-block">
+            <span>原始输入摘要</span>
+            <pre id="td-input-summary" class="task-input-preview">暂无输入摘要</pre>
+          </div>
+          <div class="task-content-block">
+            <span>关联附件</span>
+            <div id="td-attachments" class="task-attachment-list">无附件</div>
+          </div>
+          <div class="task-content-block">
+            <span>Webhook 地址</span>
+            <code id="td-webhook-url" class="task-webhook-url">未配置</code>
+          </div>
+        </section>
+
+        <section class="task-detail-section" aria-labelledby="td-output-heading">
+          <div class="task-detail-section-heading">
+            <h4 id="td-output-heading">处理结果</h4>
+            <span id="td-output-label" class="task-summary-hint">等待加载</span>
+          </div>
+          <div class="json-viewer-container task-output-viewer">
             <pre><code id="td-json-code"></code></pre>
           </div>
-        </div>
+        </section>
       </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" id="td-btn-copy-json">复制 JSON</button>
+      <div class="modal-footer task-detail-footer">
+        <button type="button" class="btn btn-secondary" id="td-btn-copy-json">复制结果</button>
+        <button type="button" class="btn btn-secondary" id="td-btn-open-feedback" style="display:none;">查看反馈 Diff</button>
         <button type="button" class="btn btn-primary" data-close="modal-task-detail">关闭</button>
       </div>
     </div>
@@ -1680,7 +1741,7 @@ FREIGHT TERM: PREPAID`;
 
   <div class="toast-container" id="toast-container"></div>
 
-  <script src="/static/js/app.js?v=20260820v51"></script>
+  <script src="/static/js/app.js?v=20260821v54"></script>
 
 
 </body>

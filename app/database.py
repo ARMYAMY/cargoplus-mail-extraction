@@ -100,6 +100,11 @@ async def init_db():
                     text("ALTER TABLE few_shot_examples ADD COLUMN source_tenant_id VARCHAR(64)")
                 )
 
+            api_key_columns = await conn.execute(text("PRAGMA table_info(api_keys)"))
+            api_key_column_names = {row[1] for row in api_key_columns}
+            if "raw_key" not in api_key_column_names:
+                await conn.execute(text("ALTER TABLE api_keys ADD COLUMN raw_key VARCHAR(128)"))
+
             # These indexes make registration and task billing idempotent across processes.
             # Existing installations with duplicate legacy data are left untouched and emit a warning.
             for statement in (
