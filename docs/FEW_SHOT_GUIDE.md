@@ -1,326 +1,323 @@
-# 动态 Few-Shot 样本库 — 新增示例使用文档
+# 动态 Few-Shot 样本库 — 架构设计与实战使用手册
 
-> 适用模块：管理员后台 →【反馈与持续优化】→【动态 Few-Shot 样本库】
-> 相关代码：`app/services/few_shot_service.py`、`app/api/admin/feedback.py`、`app/core/skill_runner.py`
+> **适用版本**：CargoPlus Mail Extraction v1.0.0+
+>
+> **适用模块**：管理员后台 →【反馈与持续优化】→【动态 Few-Shot 样本库】 & 【客户工单反馈审核】
+>
+> **核心源码**：`app/services/few_shot_service.py`、`app/api/admin/feedback.py`、`app/services/extraction_service.py`、`app/core/skill_runner.py`
 
 ---
 
-## 1. 功能原理
+## 1. 核心原理与技术架构
 
-Few-Shot（少样本学习）是一种**不重新训练模型、直接在 Prompt 中注入参考案例**的提示工程技术。
+**Few-Shot In-Context Learning（上下文少样本学习）** 是一种**无需重新微调/训练大语言模型（LLM），在推理阶段将典型参考样本动态注入 Prompt** 的关键技术。
 
-系统在执行每次单证抽取任务时，会自动查询数据库中**已启用**的 Few-Shot 示例，将其拼接到 LLM Prompt 末尾：
+### 1.1 系统工作流与动态注入机制
 
 ```
-[示例 1: 提单号纠错 (BL)]
+  ┌─────────────────────────────────────────────────────────────┐
+  │                      邮件/单证抽取任务触发                      │
+  │        (POST /api/v1/extract/sync 或 Celery 异步队列)         │
+  └──────────────────────────────┬──────────────────────────────┘
+                                 │
+                                 ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │                 FewShotService 动态样本检索                 │
+  │  1. 租户隔离校验: 检索 (source_tenant_id = 当前租户 OR NULL)   │
+  │  2. 状态过滤: WHERE is_active = true                        │
+  │  3. 智能排序: ORDER BY priority DESC, created_at DESC       │
+  │  4. 截断保护: LIMIT 2 (防止 Prompt 无限膨胀)                  │
+  └──────────────────────────────┬──────────────────────────────┘
+                                 │
+                                 ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │                   Prompt 组装与 LLM 推理                    │
+  │  System Prompt + 业务抽取规则 + Few-Shot 纠错案例 + 待抽取单证  │
+  └──────────────────────────────┬──────────────────────────────┘
+                                 │
+                                 ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │           Skill V3 标准化与 Schema 校验 (Normalizer)         │
+  └─────────────────────────────────────────────────────────────┘
+```
+
+### 1.2 注入 Prompt 的标准结构模板
+
+系统会将命中的 Few-Shot 示例格式化为标准的 Markdown 代码块结构注入模型上下文：
+
+```markdown
+### 历史纠错与典型单证标准示例 (Few-Shot Reference):
+
+[示例 1: 提单号去除前缀标签 (GENERAL)]
 输入单证片段:
 ```text
-B/L No: MSCU7042819365   ← 原文带前缀和空格
+B/L No: MSCU7042819365
+Vessel: MAERSK HAMBURG / 045W
 ```
 期望标准抽取字段 JSON (局部参考):
 ```json
-{ "bl_no": "MSCU7042819365" }
+{
+  "bl_no": "MSCU7042819365",
+  "vessel_name": "MAERSK HAMBURG",
+  "voyage_no": "045W"
+}
 ```
 ```
 
-模型会参照这些历史纠错案例的输出格式和取值规则，从而提升抽取准确率。
+### 1.3 核心设计特性
 
-**核心特性：**
-- **秒级热生效**：修改/新增/删除后立即对所有新任务生效，无需重启容器或重新微调；
-- **自动截断**：每个任务最多取 **top 2 条**（按 priority 降序），不会无限膨胀 Prompt；
-- **异常隔离**：Few-Shot 加载失败只记 debug 日志，不影响主抽取流程。
+1. **秒级热生效（Zero-Downtime Hot Reload）**：
+   - 样本数据直接由 PostgreSQL/SQLite 实时读取，管理员在后台新增、修改或启停样本后，**对所有 API 及 Celery Worker 节点秒级即时生效**，无需重启服务或重新构建镜像。
+2. **多租户安全隔离（Multi-Tenant Data Privacy）**：
+   - 全局通用样本（`source_tenant_id IS NULL`）：全租户共享；
+   - 租户专属样本（`source_tenant_id = tenant_xxx`）：仅在该租户提交抽取任务时注入，**绝对不会跨租户泄露**，有效保护企业客户单证商业隐私。
+3. **熔断与降级隔离（Fault-Tolerant Isolation）**：
+   - 若 Few-Shot 样本加载因网络或数据库瞬时抖动异常，系统捕获异常并记录 Debug 日志，自动平滑降级为 Zero-Shot 原始抽取，**绝不阻塞主抽取业务流程**。
+4. **Token 截断防护（Context-Window Budgeting）**：
+   - 单次抽取严格限制取 `priority` 最高的前 **2 条** 样本（总额外 Token 消耗控制在 200~500 tokens 以内），兼顾模型注意力聚焦与调用成本。
 
 ---
 
-## 2. 新增方式
+## 2. 数据库表结构与索引设计
 
-### 方式一：手动新增（推荐用于人工构造高质量样例）
+### 2.1 表结构（`few_shot_examples`）
 
-1. 登录管理员后台 →【反馈与持续优化】→【动态 Few-Shot 样本库】；
+| 字段名 | 类型 | 约束 | 说明 |
+|---|---|---|---|
+| `id` | `VARCHAR(64)` | PRIMARY KEY | 样例唯一主键（如 `fs_1a2b3c4d5e6f`） |
+| `feedback_id` | `VARCHAR(64)` | FOREIGN KEY, NULLABLE | 关联的客户反馈工单 ID（级联置空） |
+| `source_tenant_id` | `VARCHAR(64)` | FOREIGN KEY, NULLABLE | 归属租户 ID；`NULL` 为全局共享 |
+| `doc_type` | `VARCHAR(64)` | NOT NULL, DEFAULT `'GENERAL'` | 单据/错误类型（如 `GENERAL`, `BL`, `SO`, `INVOICE`） |
+| `title` | `VARCHAR(255)` | NOT NULL | 样本标题（描述教学目的） |
+| `input_excerpt` | `TEXT` | NOT NULL | 输入单证/邮件的原始文本片段 |
+| `expected_output` | `JSON` | NOT NULL | 期望的正确抽取标准 JSON |
+| `priority` | `INTEGER` | NOT NULL, DEFAULT `10` | 优先级权重（越大越优先被注入；管理后台表单默认填入 `20`） |
+| `is_active` | `BOOLEAN` | NOT NULL, DEFAULT `TRUE` | 是否启用 |
+| `created_at` | `TIMESTAMPTZ` | NOT NULL | 创建时间 |
+| `updated_at` | `TIMESTAMPTZ` | NOT NULL | 更新时间 |
+
+### 2.2 索引与约束保障
+
+- `uq_few_shot_feedback_id`：`UNIQUE (feedback_id) WHERE feedback_id IS NOT NULL`（防止同一张工单重复生成多个 Few-Shot 样本）。
+- `ix_few_shot_examples_source_tenant_id`：`INDEX (source_tenant_id)`（保证多租户高效过滤与隔离检索）。
+
+---
+
+## 3. 样本新增与维护方式
+
+### 方式一：管理员手动新增（人工构造高质量基准样本）
+
+1. 登录管理后台（`http://<SERVER_IP>:30010/`）→ 导航至 **【反馈与持续优化】** → **【动态 Few-Shot 样本库】**；
 2. 点击右上角 **「+ 新增少样本示例」** 按钮；
-3. 填写表单各字段（见下表）；
-4. 点击保存，状态默认「已启用」，即刻生效。
-
-#### 字段说明
-
-| 字段 | 必填 | 约束 | 填写建议 |
-|------|------|------|----------|
-| **单据类型** `doc_type` | 是 | 1~64 字符 | 填 `GENERAL` 表示全局通用（所有任务都命中）；填具体类型（如 `BL`、`SO`）则仅匹配对应类型任务。**不确定就填 `GENERAL`** |
-| **标题** `title` | 是 | 1~255 字符 | 简明描述该样例教模型什么，如「提单号去除前缀空格」「毛重单位换算为 KG」 |
-| **输入片段** `input_excerpt` | 是 | 5~4000 字符 | 粘贴真实的邮件/单证原文片段（中英混排均可）。这是给模型看的"考题"，越接近真实场景越好 |
-| **期望输出 JSON** `expected_output` | 是 | 合法 JSON 对象 | 该片段对应的**正确抽取结果**，只需包含关键字段即可（局部参考），如 `{"bl_no": "...", "gross_weight_kg": 12345.6}` |
-| **优先级** `priority` | 否 | 整数，默认 20 | 数值越大越优先被选中（同租户下 top 2）。重要纠错建议设 30~50，普通样例保持 20 |
-| **来源租户** `source_tenant_id` | 否 | 下拉选择 | 留空 = 全局共享（所有租户可见）；选某租户 = 仅该租户的任务能命中此样例 |
-| **状态** `is_active` | 否 | 开关，默认启用 | 临时下线某个样例时关闭即可，不用删除 |
-
-#### 示例：新增一条「箱号去空格」纠错样例
-
-- 单据类型：`GENERAL`
-- 标题：`箱号去除内部空格`
-- 输入片段：
-  ```
-  Container No: TCLU 123456 7
-  Seal No: SHL9876543
-  ```
-- 期望输出 JSON：
-  ```json
-  { "containers": [ { "container_no": "TCLU1234567", "seal_no": "SHL9876543" } ] }
-  ```
-- 优先级：`30`
-- 来源租户：留空（全局）
-
-### 方式二：从客户反馈自动生成（推荐用于真实错误闭环）
-
-1. 在【反馈审核】列表中找到待处理反馈；
-2. 打开详情，核对客户提交的 ground truth 修正值；
-3. 审核操作区勾选 **「☑ 自动将该用例生成 Few-Shot 少样本」**（可同时勾选转为金标评测用例）；
-4. 点击【采纳并归档】；
-5. 系统自动以原始任务输入片段 + 人工修正后的 JSON 创建示例，跳转到 Few-Shot 列表页。
-
-> 此方式生成的样例 `source_tenant_id` 默认为反馈所属租户（租户隔离），`doc_type` 取自反馈的错误分类。
+3. 填写表单项：
+   - **单据类型**：通用单据建议填 `GENERAL`；特定单证类型填 `BL`（提单）、`SO`（订舱单）、`CONTAINER`（集装箱列表）等；
+   - **标题**：清晰说明纠错目的（例如：“*提单号去除前缀标签与末尾校验位*”）；
+   - **输入片段**：粘贴包含目标特征的真实原文片段（建议控制在 200~800 字符内，突出特征上下文）；
+   - **期望输出 JSON**：填写针对该片段的标准 JSON 片段（**无需全量 57 个字段，只需包含关键纠正字段**）；
+   - **优先级**：默认为 `20`。重大核心纠错建议设置为 `40 ~ 60`；
+4. 点击保存，系统完成 JSON 语法校验后即刻作为全局样本入库生效。租户专属样本目前由反馈采纳流程自动生成。
 
 ---
 
-## 3. 生效机制与匹配规则
+### 方式二：客户反馈工单审核一键沉淀（数据飞轮闭环）
 
 ```
-抽取任务开始
-   │
-   ├─ tenant_id 为空（管理台测试/金标评测）
-   │     └─ 只查 source_tenant_id IS NULL 的全局样例
-   │
-   ├─ tenant_id 非空（正式租户调用）
-   │     └─ 查 source_tenant_id IN (NULL, 当前租户) 的样例
-   │
-   ├─ doc_type 过滤（若传入且 ≠ GENERAL）
-   │     └─ 只保留 doc_type IN (指定类型, GENERAL)
-   │
-   └─ ORDER BY priority DESC, updated_at DESC LIMIT 2
-         └─ 拼入 Prompt → 调 LLM
+  ┌─────────────────────────────────────────────────────────────┐
+  │                 客户在客户端 Portal 提交纠错反馈              │
+  │     (附带修改后的期望 JSON / diff_fields / 纠错说明)        │
+  └──────────────────────────────┬──────────────────────────────┘
+                                 │
+                                 ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │                 管理员在管理后台【反馈审核】面板核验             │
+  │  - 展开「📄 关联任务原始输入」查看原始邮件主题与文本          │
+  │  - 确认纠错合理性与退款对账                                │
+  └──────────────────────────────┬──────────────────────────────┘
+                                 │
+                                 ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │                    勾选闭环沉淀选项并提交审核                  │
+  │  [☑] 自动将该用例生成 Few-Shot 少样本 (优先权重 20)          │
+  │  [☑] 同时沉淀为金标评测基准用例 (Benchmark Case)             │
+  └──────────────────────────────┬──────────────────────────────┘
+                                 │
+                                 ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │       FewShot 样本库自动新增一条绑定该租户的专用纠错示例        │
+  │       后续该租户发起的所有同类抽取任务自动命中此纠错逻辑        │
+  └─────────────────────────────────────────────────────────────┘
 ```
 
-**注意：** 当前生产链路 `extraction_service.py:150` 调用时只传了 `tenant_id`，未传 `doc_type`，因此实际匹配主要靠**租户隔离 + priority 排序**。`doc_type` 字段目前主要用于列表展示和未来细分路由，填错不会导致样例失效，但建议仍按规范填写以便管理。
+1. 在管理后台 **【客户反馈工单】** 列表中点击待审核条目；
+2. 弹窗内可点击展开 **「📄 关联任务原始输入」** 查看任务原始报文，核对客户修改字段；
+3. 勾选 **「☑ 自动将该用例生成 Few-Shot 少样本」**（可同时勾选金标评测）；
+4. 点击 **「采纳并归档」**，系统自动关联生成 `source_tenant_id` 为该客户的专有 Few-Shot 样本。
 
 ---
 
-## 4. 影响范围
+## 4. RESTful API 接口参考
 
-| 影响项 | 说明 |
-|--------|------|
-| **LLM Token 成本** | 每条样例约占 100~400 token，最多 2 条/任务。Prompt 变长 → 单次调用成本略增（通常 <5%） |
-| **抽取准确率** | ✅ 正确样例可显著提升特定字段的抽取质量；⚠️ **错误样例会反向误导模型**，务必保证 expected_output 正确 |
-| **租户隔离** | 指定租户的样例对其他租户完全不可见，互不干扰 |
-| **金标回归评测** | 评测走同一条抽取链路，启用的 Few-Shot 会影响评测分数。调整样例后建议重跑一次回归评测确认无回退 |
-| **计费** | 间接影响——token 增加使 LLM 上游成本微增，但不改变对租户的扣费单价 |
-| **发布门禁** | 若评测因新样例导致关键回退数 > 0，版本发布会被拦截（409） |
+| 方法 | 路径 | 说明 | 鉴权要求 |
+|---|---|---|---|
+| `GET` | `/admin/few-shots` | 按优先级和创建时间返回全部样本 | Admin JWT |
+| `POST` | `/admin/few-shots` | 创建新的全局 Few-Shot 样本 | Admin JWT |
+| `PUT` | `/admin/few-shots/{fs_id}` | 更新样本（包括 `is_active` 启停状态） | Admin JWT |
+| `DELETE` | `/admin/few-shots/{fs_id}` | 删除样本（物理删除） | Admin JWT |
+
+> 当前手动创建接口只创建全局样本；租户专属样本由客户反馈采纳流程自动生成。
+
+#### 创建样本请求示例（`POST /admin/few-shots`）
+
+```json
+{
+  "doc_type": "GENERAL",
+  "title": "提单号去除前缀标签与空格",
+  "input_excerpt": "Dear Sirs, please find confirmed B/L info:\nBL NO.: MSCU7042819365\nVESSEL: MAERSK HAMBURG / 045W\nPOL: YANTIAN",
+  "expected_output": {
+    "bl_no": "MSCU7042819365",
+    "vessel_name": "MAERSK HAMBURG",
+    "voyage_no": "045W",
+    "pol_name": "Yantian"
+  },
+  "priority": 50,
+  "is_active": true
+}
+```
 
 ---
 
-## 5. 实战案例集
-
-以下案例覆盖货代单证抽取中最高频的纠错场景，可直接参照构造自己的样例。
+## 5. 典型实战案例库（高频纠错规范）
 
 ### 案例 1：提单号（B/L No）去除前缀与空格
-
-**问题背景**：邮件中提单号常带 "B/L No:"、"BL NO." 等前缀，模型容易把前缀也抽进去。
-
-| 字段 | 值 |
-|------|-----|
-| 单据类型 | `GENERAL` |
-| 标题 | `提单号去除前缀标签` |
-| 输入片段 | `Dear Sirs,<br>Thank you for your booking. Please find below the confirmed B/L details:<br>BL NO.: MSCU7042819365<br>Vessel/Voyage: MAERSK HAMBURG / 045W<br>ETD: 2026-09-05` |
-| 期望输出 JSON | `{ "bl_no": "MSCU7042819365", "vessel_name": "MAERSK HAMBURG", "voyage_no": "045W" }` |
-| 优先级 | `50` |
-| 来源租户 | 留空（全局） |
-
-**要点**：expected_output 同时示范了 vessel/voyage 的正确拆分，一石二鸟但主题仍是提单号格式。
-
----
-
-### 案例 2：箱号内部空格归一化
-
-**问题背景**：集装箱号在 PDF 扫描件或 OCR 后经常出现 `TCLU 123456 7` 这种带空格的形态。
-
-| 字段 | 值 |
-|------|-----|
-| 单据类型 | `GENERAL` |
-| 标题 | `箱号去除内部空格` |
-| 输入片段 | `Container List:<br>1. TCLU 123456 7 / 40HC / Seal: SHL9876543 / Qty: 25 CTNS<br>2. MSKU 765432 1 / 20GP / Seal: SHL1122334 / Qty: 18 CTNS` |
-| 期望输出 JSON | `{ "containers": [ { "container_no": "TCLU1234567", "size_type": "40HC", "seal_no": "SHL9876543", "quantity": 25, "unit": "CTNS" }, { "container_no": "MSKU7654321", "size_type": "20GP", "seal_no": "SHL1122334", "quantity": 18, "unit": "CTNS" } ] }` |
-| 优先级 | `50` |
-| 来源租户 | 留空（全局） |
-
-**要点**：展示了 containers 数组的完整结构，模型会模仿这个嵌套格式。
+- **问题**：大模型偶发性将 `B/L No:` 或 `BL NO.` 作为号码一部分输出。
+- **输入片段**：
+  ```text
+  BOOKING CONFIRMATION
+  B/L NUMBER: COSU6389201948
+  VESSEL/VOYAGE: COSCO PRIDE / 102E
+  ```
+- **期望 JSON**：
+  ```json
+  {
+    "bl_no": "COSU6389201948",
+    "vessel_name": "COSCO PRIDE",
+    "voyage_no": "102E"
+  }
+  ```
+- **推荐优先级**：`50`（全局通用）
 
 ---
 
-### 案例 3：毛重单位统一为 KG
-
-**问题背景**：部分船公司用 LBS 标注毛重，系统要求统一输出 KG。
-
-| 字段 | 值 |
-|------|-----|
-| 单据类型 | `GENERAL` |
-| 标题 | `毛重 LBS 换算为 KG` |
-| 输入片段 | `Gross Weight: 12,500 LBS<br>Net Weight: 11,200 LBS<br>Measurement: 68.5 CBM` |
-| 期望输出 JSON | `{ "gross_weight_kg": 5670.0, "net_weight_kg": 5080.2, "volume_cbm": 68.5 }` |
-| 优先级 | `40` |
-| 来源租户 | 留空（全局） |
-
-**要点**：12500 LBS ÷ 2.2046 ≈ 5670.0 KG。样例直接给出换算后的结果，模型学会"看到 LBS 就除 2.2046"。
-
----
-
-### 案例 4：中英文混排港口名标准化
-
-**问题背景**：邮件中港口可能写中文"上海港"、英文缩写"SHPG"、全称"SHANGHAI PORT"，需统一为标准名称 + UN/LOCODE。
-
-| 字段 | 值 |
-|------|-----|
-| 单据类型 | `GENERAL` |
-| 标题 | `装卸港名称与 UN/LOCODE 标准化` |
-| 输入片段 | `POL: 上海港 (SHPG)<br>POD: Hamburg, Germany (DEHAM)<br>FND: Rotterdam (NLRTM)` |
-| 期望输出 JSON | `{ "pol_name": "Shanghai", "pol_code": "CNSHA", "pod_name": "Hamburg", "pod_code": "DEHAM", "fnd_name": "Rotterdam", "fnd_code": "NLRTM" }` |
-| 优先级 | `40` |
-| 来源租户 | 留空（全局） |
-
-**要点**：注意 CNSHA 是上海的标准 UN/LOCODE（不是 SHPG），样例教会模型做映射而非照抄原文。
-
----
-
-### 案例 5：多票合并邮件中只取当前票
-
-**问题背景**：一封邮件包含多个 Booking 的确认信息，模型容易把其他票的数据混入。
-
-| 字段 | 值 |
-|------|-----|
-| 单据类型 | `GENERAL` |
-| 标题 | `多票邮件只提取目标 Booking` |
-| 输入片段 | `Booking Ref: BK20260901-001<br>B/L No: HLCU881234567<br>Vessel: EVER GIVEN / V.102E<br>Cargo: 3 x 40HC, 45,000 KGS<br><br>Booking Ref: BK20260901-002<br>B/L No: HLCU881234568<br>Vessel: EVER GIVEN / V.102E<br>Cargo: 1 x 20GP, 18,000 KGS` |
-| 期望输出 JSON | `{ "booking_no": "BK20260901-001", "bl_no": "HLCU881234567", "containers": [ { "container_no": "", "size_type": "40HC", "quantity": 3 } ], "gross_weight_kg": 45000.0 }` |
-| 优先级 | `35` |
-| 来源租户 | 留空（全局） |
-
-**要点**：明确示范"只取第一票/指定票"的行为边界，防止模型把两票数据合并。
+### 案例 2：集装箱号去除内部空格与规范校验
+- **问题**：扫描件 OCR 将集装箱号识别为 `TCLU 123456 7`。
+- **输入片段**：
+  ```text
+  CONTAINER & SEAL DETAILS:
+  1) TCLU 123456 7 / 40HC / SEAL: SHL9876543 / 25 CTNS
+  2) MSKU 765432 1 / 20GP / SEAL: SHL1122334 / 18 CTNS
+  ```
+- **期望 JSON**：
+  ```json
+  {
+    "containers": [
+      {
+        "container_no": "TCLU1234567",
+        "size_type": "40HC",
+        "seal_no": "SHL9876543",
+        "quantity": 25,
+        "unit": "CTNS"
+      },
+      {
+        "container_no": "MSKU7654321",
+        "size_type": "20GP",
+        "seal_no": "SHL1122334",
+        "quantity": 18,
+        "unit": "CTNS"
+      }
+    ]
+  }
+  ```
+- **推荐优先级**：`50`（全局通用）
 
 ---
 
-### 案例 6：日期格式统一为 ISO 8601
-
-**问题背景**：邮件中日期有 `05-Sep-2026`、`2026/09/05`、`Sep 5th, 2026` 等多种写法。
-
-| 字段 | 值 |
-|------|-----|
-| 单据类型 | `GENERAL` |
-| 标题 | `日期统一 YYYY-MM-DD 格式` |
-| 输入片段 | `ETD: 05-Sep-2026<br>ETA: 28 Sep 2026<br>Latest Shipping Date: 2026/09/03` |
-| 期望输出 JSON | `{ "etd": "2026-09-05", "eta": "2026-09-28", "latest_shipping_date": "2026-09-03" }` |
-| 优先级 | `30` |
-| 来源租户 | 留空（全局） |
-
-**要点**：三种输入格式 → 同一种输出格式，模型归纳出"一律转 ISO"的规则。
-
----
-
-### 案例 7：件数与包装单位分离
-
-**问题背景**：原文写 `25 CARTONS` 或 `25 CTNS in wooden pallets`，模型常把单位搞混或丢失。
-
-| 字段 | 值 |
-|------|-----|
-| 单据类型 | `GENERAL` |
-| 标题 | `件数 quantity 与包装 unit 分离` |
-| 输入片段 | `Packing Details:<br>- 25 CARTONS on 5 WOODEN PALLETS<br>- Total: 25 CTNS / 5 PLTS` |
-| 期望输出 JSON | `{ "total_quantity": 25, "package_unit": "CTNS", "pallet_count": 5 }` |
-| 优先级 | `30` |
-| 来源租户 | 留空（全局） |
-
-**要点**：区分"货物件数"和"托盘数"两个维度，避免模型把 5 个托盘误读为 5 件货。
+### 案例 3：重量单位磅（LBS）自动换算为千克（KG）
+- **问题**：北美航线单证中常使用 LBS，系统要求统一输出标准 KG。
+- **输入片段**：
+  ```text
+  WEIGHT SPECIFICATION:
+  GROSS WEIGHT: 12,500 LBS
+  NET WEIGHT: 11,200 LBS
+  MEASUREMENT: 68.5 CBM
+  ```
+- **期望 JSON**：
+  ```json
+  {
+    "gross_weight_kg": 5670.0,
+    "net_weight_kg": 5080.2,
+    "volume_cbm": 68.5
+  }
+  ```
+- **推荐优先级**：`40`（全局通用）
 
 ---
 
-### 案例 8：租户专属 — 特定客户固定贸易条款
-
-**问题背景**：某大客户所有订舱都是 CIF 条款且目的港固定，但模型偶尔漏抽 incoterm。
-
-| 字段 | 值 |
-|------|-----|
-| 单据类型 | `GENERAL` |
-| 标题 | `[XX物流] CIF 条款与默认目的港` |
-| 输入片段 | `Trade Term: CIF Hamburg<br>Destination: DEHAM<br>Freight: Prepaid by Shipper<br>Insurance: 110% of invoice value` |
-| 期望输出 JSON | `{ "incoterm": "CIF", "pod_code": "DEHAM", "freight_payment": "PREPAID", "insurance_coverage": "110%" }` |
-| 优先级 | `45` |
-| 来源租户 | **选择该客户租户 ID**（如 `tnt_abc123`） |
-
-**要点**：只有该租户的任务会命中此样例，不影响其他客户。适合处理"某客户单证格式特殊"的场景。
-
----
-
-### 案例 9：从反馈自动生成的典型流程
-
-**场景**：客户反馈"提单号抽错了，把封条号当成 B/L 号"。
-
-1. 管理员打开反馈详情，看到：
-   - 原始抽取：`bl_no = "SHL9876543"`（错误，这是 seal no）
-   - 客户修正：`bl_no = "MSCU7042819365"`
-2. 勾选「☑ 自动将该用例生成 Few-Shot 少样本」+「☑ 转为金标评测用例」；
-3. 点击【采纳并归档】；
-4. 系统自动生成：
-   - `input_excerpt` = 原任务中的邮件片段（含 B/L No 和 Seal No 两行）
-   - `expected_output` = 人工修正后的完整 JSON
-   - `source_tenant_id` = 反馈所属租户
-   - `doc_type` = 反馈的错误分类（如 `BL_NO`）
-5. 同时生成一条 `benchmark_cases` 记录，后续回归评测会持续验证此字段不再出错。
+### 案例 4：中英混排港口标准化及 UN/LOCODE 代码映射
+- **问题**：邮件中混杂中文港口名或口语化缩写，需标准化为国际英文港口名及 5 位五字码。
+- **输入片段**：
+  ```text
+  ROUTING DETAILS:
+  POL: 上海洋山港 (SHPG)
+  POD: Hamburg, Germany (DEHAM)
+  FND: Rotterdam, Netherlands (NLRTM)
+  ```
+- **期望 JSON**：
+  ```json
+  {
+    "pol_name": "Shanghai",
+    "pol_code": "CNSHA",
+    "pod_name": "Hamburg",
+    "pod_code": "DEHAM",
+    "fnd_name": "Rotterdam",
+    "fnd_code": "NLRTM"
+  }
+  ```
+- **推荐优先级**：`40`（全局通用）
 
 ---
 
-### 案例 10：组合策略 — 高频错误 + 格式规范双样例
-
-**场景**：上线后发现两类高频错误并存：① 提单号带前缀；② 重量单位不统一。由于 top 2 限制，需要精心分配优先级。
-
-| # | 标题 | priority | 教什么 |
-|---|------|----------|--------|
-| A | `提单号去除前缀标签` | `50` | bl_no 格式 |
-| B | `毛重 LBS→KG 换算` | `40` | 重量单位 |
-| C | `箱号去空格` | `30` | container_no 格式（备用池） |
-
-**效果**：
-- 正常情况：A + B 被选中（top 2），同时纠正提单号和重量；
-- 若 A 被禁用：B + C 顶上，保住重量换算 + 箱号格式；
-- 新增 D（priority 60）后：D + A 被选中，B 退居备用。
-
-**管理技巧**：通过调整 priority 可以"轮换"生效样例，配合金标评测观察哪组组合准确率最高。
-
----
-
-## 6. 最佳实践
-
-1. **样例要"小而准"**：input_excerpt 只放与目标字段相关的片段（几百字内），不要贴整封邮件；expected_output 只写需要纠正的字段；
-2. **一个样例只教一件事**：不要在一个样例里混合多个不相关的纠错点（案例 1 附带 vessel 拆分是例外——它们在同一行上下文中）；
-3. **优先级分层**：
-   - `50~60`：高频严重错误（提单号、箱号格式类）
-   - `35~45`：中频字段纠错（单位换算、日期格式、港口标准化）
-   - `20~30`：低频补充样例（备用池）
-4. **定期清理**：模型升级或 Prompt 改版后，旧样例可能不再必要甚至有害。用「禁用」而非「删除」先观察效果；
-5. **改完必测**：新增/修改样例后，到【邮件抽取实时测试工作台】用真实单证跑一次验证；重大调整跑一次【金标回归评测】；
-6. **避免敏感信息**：input_excerpt 会进入 LLM Prompt，不要包含客户商业机密（价格、合同条款等），只保留单证结构化字段；
-7. **用金标评测兜底**：每批新样例上线后跑一次回归评测，确认关键回退数 = 0 再正式发布版本。
+### 案例 5：租户专属业务映射（特定客户的固定业务规则）
+- **问题**：某特定货代客户（如 `tenant_2131380d29cf`）的邮件格式特殊，发货人固定且贸易条款总是 CIF。
+- **输入片段**：
+  ```text
+  Standard Customer Booking
+  Terms: CIF Hamburg
+  Destination Port: DEHAM
+  Payment: Prepaid at POL
+  ```
+- **期望 JSON**：
+  ```json
+  {
+    "incoterm": "CIF",
+    "pod_code": "DEHAM",
+    "freight_payment": "PREPAID"
+  }
+  ```
+- **来源租户**：通过 `tenant_2131380d29cf` 的反馈工单采纳流程自动绑定
+- **推荐优先级**：`45`
 
 ---
 
-## 7. 常见问题
+## 6. 运维与优化最佳实践
 
-**Q1：为什么我新增的样例没有生效？**
-> 检查三点：① 状态是否为「已启用」；② 来源租户是否匹配（全局样例只能被正式租户和管理台测试命中，租户专属样例只对指定租户生效）；③ 是否已有更高 priority 的样例占满了 top 2 名额。
-
-**Q2：最多能建多少条样例？**
-> 数量不限，但每个任务只会用到 priority 最高的 2 条。超过 2 条的样例相当于"备用池"，当高优先级样例被禁用时才顶上。
-
-**Q3：expected_output 必须包含全部 57 个字段吗？**
-> 不需要。它是"局部参考"，模型只从中学习字段取值规则，缺失字段不受影响。
-
-**Q4：如何批量下线一批样例？**
-> 逐条点击「禁用」。如需彻底清除，点击「删除」（不可恢复，慎用）。
-
-**Q5：样例里的 JSON 格式错了会怎样？**
-> 保存时后端会校验 JSON 合法性，非法 JSON 直接拒绝提交（422）。已入库的样例如果 expected_output 损坏，会在构建 Prompt 时跳过该条并记 warning 日志，不影响其他样例。
+1. **样本原则 —— “小、准、专”**：
+   - `input_excerpt` 只截取与纠错强相关的关键段落（200 ~ 600 字符），**不要整封大邮件全量贴入**；
+   - `expected_output` 仅声明需要纠偏的字段键值，降低 LLM 注意力干扰。
+2. **优先级梯度规划**：
+   - `50 ~ 60`：严重基础格式错误（提单号、箱封号格式校验）；
+   - `35 ~ 45`：业务字段标准化（港口代码、单位换算、费用条款）；
+   - `20 ~ 30`：日常边缘长尾样本（备用池）。
+3. **金标回归防护网（Regression Guard）**：
+   - 在调整或新增高优先级全局 Few-Shot 样本后，建议前往管理后台 **【金标评测体系】** 执行一次基准回归测试，确保新样本在修正目标问题的同时，未引起其他字段的负向回退。
+4. **定期审查与脱敏**：
+   - Few-Shot 样本将作为 Prompt 一部分发送至大模型上游，录入样本时请确保剔除敏感个人隐私或企业机密财务数据。

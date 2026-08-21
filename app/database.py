@@ -229,8 +229,10 @@ async def init_db():
                 "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS lease_owner VARCHAR(128);",
                 "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;",
                 "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;",
-                "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS feedback_id VARCHAR(64);",
-                "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS source_tenant_id VARCHAR(64);",
+                "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS feedback_id VARCHAR(64) "
+                "REFERENCES task_feedbacks(id) ON DELETE SET NULL;",
+                "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS source_tenant_id VARCHAR(64) "
+                "REFERENCES tenants(id) ON DELETE CASCADE;",
                 "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS raw_key VARCHAR(128);",
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_tenants_contact_email ON tenants(lower(contact_email)) WHERE contact_email IS NOT NULL;",
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_task_type ON billing_transactions(task_id, type) WHERE task_id IS NOT NULL;",

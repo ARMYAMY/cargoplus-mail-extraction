@@ -110,6 +110,15 @@ async def test_database_postgresql_upgrade_branch():
          patch("app.database.engine", mock_engine):
         await init_db()
         assert mock_conn.execute.call_count >= 8
+        statements = [str(call.args[0]) for call in mock_conn.execute.call_args_list]
+        assert any(
+            "feedback_id VARCHAR(64) REFERENCES task_feedbacks(id) ON DELETE SET NULL" in statement
+            for statement in statements
+        )
+        assert any(
+            "source_tenant_id VARCHAR(64) REFERENCES tenants(id) ON DELETE CASCADE" in statement
+            for statement in statements
+        )
 
 
 @pytest.mark.asyncio

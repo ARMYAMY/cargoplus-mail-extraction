@@ -1024,8 +1024,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       tbody.innerHTML = keys.map(k => {
-        const hasFullKey = Boolean(k.raw_key && k.raw_key.length > 20) || Boolean(k.raw_api_key && k.raw_api_key.length > 20);
-        const fullKey = hasFullKey ? (k.raw_key || k.raw_api_key) : '';
+        const fullKey = [k.raw_key, k.raw_api_key]
+          .find(value => typeof value === 'string' && value.length > 20) || '';
+        const hasFullKey = Boolean(fullKey);
         const displayKey = k.key_prefix ? `${k.key_prefix}...` : (fullKey ? `${fullKey.substring(0, 11)}...` : '-');
 
         let keyCopyBtn = '';
@@ -1972,34 +1973,66 @@ MEAS: 68.000 CBM`;
       const finishedTasksMap = new Map(); // taskId -> status
       const totalSubmitted = submittedTaskIds.length;
       const dynamicTimeoutMs = Math.max(300000, totalSubmitted * 6000); // at least 5 mins, 6s per task
+      let pollTimer = null;
+      let pollInFlight = false;
+      let pollingFinished = false;
 
-      const pollTimer = setInterval(async () => {
+      const finishBenchmark = (timedOut, successCount, completedCount, timeoutReason = '') => {
+        if (pollingFinished) return;
+        pollingFinished = true;
+        if (pollTimer) clearInterval(pollTimer);
+
+        const totalElapsedSec = Math.max((Date.now() - startTime) / 1000, 0.001);
+        const failedCount = completedCount - successCount;
+        const unfinishedCount = totalSubmitted - completedCount;
+        const throughput = completedCount / totalElapsedSec;
+        progressBar.style.width = '100%';
+        progressText.textContent = timedOut
+          ? `压测超时: ${completedCount} / ${totalSubmitted} 完成`
+          : `压测完成: ${completedCount} / ${totalSubmitted} 完成`;
+        statusBadge.textContent = timedOut ? '压测超时' : '压测完成';
+        statusBadge.className = timedOut ? 'text-warning' : 'text-success';
+        btnStartBench.disabled = false;
+
+        logText += `\n========================================\n`;
+        logText += `📊 并发压测完成总结报告:\n`;
+        logText += `总提交任务: ${totalSubmitted}\n`;
+        logText += `提交失败数: ${failedSubmissionCount}\n`;
+        logText += `成功完成数: ${successCount} (${((successCount / totalSubmitted) * 100).toFixed(1)}%)\n`;
+        logText += `执行失败数: ${failedCount}\n`;
+        if (unfinishedCount > 0) logText += `超时未完成数: ${unfinishedCount}\n`;
+        if (timeoutReason) logText += `超时原因: ${timeoutReason}\n`;
+        logText += `总耗时: ${totalElapsedSec.toFixed(2)} 秒\n`;
+        logText += `已完成吞吐率 (TPS): ${throughput.toFixed(2)} 封/秒\n`;
+        logText += `折合日处理量: ${(throughput * 86400).toFixed(0)} 封/天\n`;
+        const configuredUnitPrice = Number(selectedTenant.unit_price);
+        const unitPrice = Number.isFinite(configuredUnitPrice) ? configuredUnitPrice : 0.5;
+        logText += `扣费对账: ¥${(successCount * unitPrice).toFixed(2)} (成功 ${successCount} 次 × ${unitPrice.toFixed(2)} 元)\n`;
+        logText += `========================================\n`;
+        liveLog.textContent = logText;
+        liveLog.scrollTop = liveLog.scrollHeight;
+
+        loadDashboardStats();
+        loadTasksTable();
+        loadTenantsTable();
+      };
+
+      const pollTaskStatuses = async () => {
+        if (pollInFlight || pollingFinished) return;
+        pollInFlight = true;
         try {
-          const tenantParam = selectedTenantId ? `&tenant_id=${encodeURIComponent(selectedTenantId)}` : '';
-          const checkRes = await adminFetch(`/admin/tasks?page=1&page_size=100${tenantParam}`);
+          const checkRes = await adminFetch('/admin/tasks/statuses', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ task_ids: submittedTaskIds }),
+          });
           if (!checkRes.ok) throw new Error(`任务状态查询失败 (HTTP ${checkRes.status})`);
-          const checkData = await checkRes.json();
-          const items = checkData.items || [];
+          const items = await checkRes.json();
 
           for (const it of items) {
-            if (submittedTaskIds.includes(it.id) && (it.status === 'SUCCESS' || it.status === 'FAILED')) {
+            if (it.status === 'SUCCESS' || it.status === 'FAILED') {
               finishedTasksMap.set(it.id, it.status);
             }
-          }
-
-          // If there are more than 100 tasks, also fetch page 2
-          if (totalSubmitted > 80 && checkData.total > 100) {
-            try {
-              const p2Res = await adminFetch(`/admin/tasks?page=2&page_size=100${tenantParam}`);
-              if (p2Res.ok) {
-                const p2Data = await p2Res.json();
-                for (const it of (p2Data.items || [])) {
-                  if (submittedTaskIds.includes(it.id) && (it.status === 'SUCCESS' || it.status === 'FAILED')) {
-                    finishedTasksMap.set(it.id, it.status);
-                  }
-                }
-              }
-            } catch (_) {}
           }
 
           const completedCount = finishedTasksMap.size;
@@ -2015,35 +2048,25 @@ MEAS: 68.000 CBM`;
           const elapsedMs = Date.now() - startTime;
           const timedOut = elapsedMs > dynamicTimeoutMs;
           if (completedCount >= totalSubmitted || timedOut) {
-            clearInterval(pollTimer);
-            const totalElapsedSec = (elapsedMs / 1000).toFixed(2);
-            progressBar.style.width = '100%';
-            statusBadge.textContent = timedOut ? '压测超时' : '压测完成';
-            statusBadge.className = timedOut ? 'text-warning' : 'text-success';
-            btnStartBench.disabled = false;
-
-            logText += `\n========================================\n`;
-            logText += `📊 并发压测完成总结报告:\n`;
-            logText += `总提交任务: ${totalSubmitted}\n`;
-            logText += `提交失败数: ${failedSubmissionCount}\n`;
-            logText += `成功完成数: ${successCount} (${((successCount / totalSubmitted) * 100).toFixed(1)}%)\n`;
-            logText += `总耗时: ${totalElapsedSec} 秒\n`;
-            logText += `吞吐率 (TPS): ${(totalSubmitted / totalElapsedSec).toFixed(2)} 封/秒\n`;
-            logText += `折合日处理量: ${((totalSubmitted / totalElapsedSec) * 86400).toFixed(0)} 封/天\n`;
-            const unitPrice = Number(selectedTenant.unit_price || 0.5);
-            logText += `扣费对账: ¥${(successCount * unitPrice).toFixed(2)} (成功 ${successCount} 次 × ${unitPrice.toFixed(2)} 元)\n`;
-            logText += `========================================\n`;
-            liveLog.textContent = logText;
-            liveLog.scrollTop = liveLog.scrollHeight;
-
-            loadDashboardStats();
-            loadTasksTable();
-            loadTenantsTable();
+            finishBenchmark(timedOut, successCount, completedCount);
           }
         } catch (pollErr) {
           console.error(pollErr);
+          if (Date.now() - startTime > dynamicTimeoutMs) {
+            const completedCount = finishedTasksMap.size;
+            const successCount = Array.from(finishedTasksMap.values())
+              .filter(status => status === 'SUCCESS').length;
+            finishBenchmark(true, successCount, completedCount, pollErr.message);
+          } else {
+            progressText.textContent = `任务状态查询暂时失败，正在重试: ${pollErr.message}`;
+          }
+        } finally {
+          pollInFlight = false;
         }
-      }, 1500);
+      };
+
+      pollTimer = setInterval(pollTaskStatuses, 1500);
+      pollTaskStatuses();
     });
   }
 

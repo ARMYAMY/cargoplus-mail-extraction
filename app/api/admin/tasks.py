@@ -7,7 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.task import EmailTask
 from app.models.feedback import TaskFeedback
-from app.schemas.task import TaskDetailResponse, TaskFeedbackSummary, TaskListResponse
+from app.schemas.task import (
+    TaskDetailResponse,
+    TaskFeedbackSummary,
+    TaskListResponse,
+    TaskStatusBatchRequest,
+    TaskStatusItem,
+)
 from app.api.deps import verify_admin_access
 from app.services.billing_service import BillingService
 from app.services.queue_service import task_queue
@@ -113,6 +119,24 @@ async def list_all_tasks_admin(
         page_size=page_size,
         items=[_format_task_response(t) for t in tasks],
     )
+
+
+@router.post("/statuses", response_model=list[TaskStatusItem], summary="批量查询指定任务状态")
+async def get_task_statuses_admin(
+    data: TaskStatusBatchRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    # Preserve the request's bounded size while avoiding redundant SQL parameters.
+    task_ids = list(dict.fromkeys(data.task_ids))
+    result = await db.execute(
+        select(EmailTask.id, EmailTask.status).where(EmailTask.id.in_(task_ids))
+    )
+    statuses = {task_id: task_status for task_id, task_status in result.all()}
+    return [
+        TaskStatusItem(id=task_id, status=statuses[task_id])
+        for task_id in task_ids
+        if task_id in statuses
+    ]
 
 
 @router.get("/{task_id}", response_model=TaskDetailResponse, summary="管理员查看单条任务完整上下文")

@@ -125,7 +125,23 @@ async def test_admin_tasks_and_billing_branches():
         res_retry_conflict = await client.post(f"/admin/tasks/{task_charged.id}/retry", headers=admin_headers)
         assert res_retry_conflict.status_code == 409
 
-        # 2. Query billing transactions with search & type & tenant_id
+        # 2. Batch status lookup is exact and does not depend on task-list pagination.
+        res_statuses = await client.post(
+            "/admin/tasks/statuses",
+            headers=admin_headers,
+            json={"task_ids": [task_charged.id, "task_missing"]},
+        )
+        assert res_statuses.status_code == 200
+        assert res_statuses.json() == [{"id": task_charged.id, "status": "FAILED"}]
+
+        too_many_statuses = await client.post(
+            "/admin/tasks/statuses",
+            headers=admin_headers,
+            json={"task_ids": [f"task_{i}" for i in range(101)]},
+        )
+        assert too_many_statuses.status_code == 422
+
+        # 3. Query billing transactions with search & type & tenant_id
         res_tx = await client.get(
             f"/admin/billing/transactions?tenant_id={t_id}&type=DEDUCTION&search=Searchable",
             headers=admin_headers,
