@@ -1514,10 +1514,10 @@ FREIGHT TERM: PREPAID`;
 
         <!-- Newly Generated Key Alert Box -->
         <div id="new-key-alert" style="display:none; background:rgba(16, 185, 129, 0.12); border:1px solid rgba(16, 185, 129, 0.35); border-radius:12px; padding:16px; margin-bottom:18px;">
-          <div style="color:#34d399; font-weight:600; font-size:0.9rem; margin-bottom:6px;">✨ 新 API Key 生成成功 (请立即复制保存，关闭后将不再显示完整密文):</div>
+          <div style="color:#34d399; font-weight:600; font-size:0.9rem; margin-bottom:6px;">✨ 新 API Key 生成成功 (已存入数据库，可随时在此复制):</div>
           <div class="copy-input-group" style="margin-bottom:8px;">
             <input type="text" id="new-key-full-val" class="form-control font-mono" readonly style="color:#38bdf8; font-weight:600;">
-            <button type="button" class="btn btn-primary" onclick="copyToClipboard(document.getElementById('new-key-full-val').value)">一键复制 Key</button>
+            <button type="button" class="btn btn-primary" onclick="copyToClipboard(document.getElementById('new-key-full-val').value, 'API Key 已成功复制！')">一键复制 Key</button>
           </div>
           <div style="font-size:0.75rem; color:var(--text-secondary);">Webhook 签名 Secret: <code id="new-key-secret-val" style="color:#fbbf24;"></code></div>
         </div>

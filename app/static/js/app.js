@@ -1024,21 +1024,30 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       tbody.innerHTML = keys.map(k => {
-        const fullKey = k.raw_api_key || k.raw_key || k.key_prefix;
+        const hasFullKey = Boolean(k.raw_key && k.raw_key.length > 20) || Boolean(k.raw_api_key && k.raw_api_key.length > 20);
+        const fullKey = hasFullKey ? (k.raw_key || k.raw_api_key) : '';
         const displayKey = k.key_prefix ? `${k.key_prefix}...` : (fullKey ? `${fullKey.substring(0, 11)}...` : '-');
+
+        let keyCopyBtn = '';
+        if (hasFullKey) {
+          keyCopyBtn = `<button type="button" class="btn btn-xs btn-primary btn-copy-key-val" data-key="${escapeHtml(fullKey)}" title="复制完整 55 位 API Key">复制 Key</button>`;
+        } else {
+          keyCopyBtn = `<button type="button" class="btn btn-xs btn-outline-warning btn-legacy-key-hint" title="历史旧密钥仅单向哈希加密存储，无法还原明文。建议生成新 Key 使用">旧版单向加密</button>`;
+        }
+
         return `
         <tr>
           <td style="white-space:nowrap;"><strong>${escapeHtml(k.name || '默认密钥')}</strong></td>
           <td style="white-space:nowrap;">
             <div style="display:inline-flex; align-items:center; gap:8px;">
               <code style="color:#38bdf8; font-size:0.82rem; font-family:var(--font-mono);">${escapeHtml(displayKey)}</code>
-              ${fullKey ? `<button type="button" class="btn btn-xs btn-secondary btn-copy-key-val" data-key="${escapeHtml(fullKey)}" title="复制完整 API Key">复制</button>` : ''}
+              ${keyCopyBtn}
             </div>
           </td>
           <td style="white-space:nowrap;">
             <div style="display:inline-flex; align-items:center; gap:8px;">
               <span style="font-family:var(--font-mono); font-size:0.8rem; color:#fbbf24;">${escapeHtml(k.api_secret ? k.api_secret.substring(0, 10) + '...' : '-')}</span>
-              ${k.api_secret ? `<button type="button" class="btn btn-xs btn-secondary btn-copy-secret-val" data-secret="${escapeHtml(k.api_secret)}" title="复制完整 Secret">复制</button>` : ''}
+              ${k.api_secret ? `<button type="button" class="btn btn-xs btn-secondary btn-copy-secret-val" data-secret="${escapeHtml(k.api_secret)}" title="复制完整 Secret">复制 Secret</button>` : ''}
             </div>
           </td>
           <td style="white-space:nowrap; text-align:center;">${k.is_active ? '<span class="badge badge-success">正常</span>' : '<span class="badge badge-danger">已吊销</span>'}</td>
@@ -1054,7 +1063,17 @@ document.addEventListener('DOMContentLoaded', () => {
       document.querySelectorAll('.btn-copy-key-val').forEach(btn => {
         btn.addEventListener('click', () => {
           const keyVal = btn.dataset.key || '';
-          copyToClipboard(keyVal, 'API Key 已成功复制！');
+          if (keyVal.length > 20) {
+            copyToClipboard(keyVal, '完整 API Key 已成功复制到剪贴板！');
+          } else {
+            showToast('warning', '该 Key 为历史加密版本，未留存明文，请点击右上角生成新 Key 使用！');
+          }
+        });
+      });
+
+      document.querySelectorAll('.btn-legacy-key-hint').forEach(btn => {
+        btn.addEventListener('click', () => {
+          showToast('warning', '该 Key 为历史版本创建（仅哈希存储），无法反解明文。请点击右上角「生成新 API Key」即可获得完整明文密钥并随时复制！');
         });
       });
 
