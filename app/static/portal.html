@@ -24,6 +24,16 @@
 
 </head>
 <body class="portal-page">
+  <!-- Full-viewport Background Video and 3D Rotating Particle Earth -->
+  <div class="hero-bg-container">
+    <video class="bg-video" autoplay muted loop playsinline poster="/static/media/earth_bg.mp4">
+      <source src="/static/media/earth_bg.mp4" type="video/mp4">
+      <source src="https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260613_180732_a54afbf6-b30d-470e-861f-669871f09f67.mp4" type="video/mp4">
+    </video>
+    <div class="dark-overlay"></div>
+    <canvas id="earth-canvas"></canvas>
+  </div>
+
   <div class="app-layout">
     <header class="portal-topbar">
       <div class="portal-topbar-inner">
@@ -528,6 +538,120 @@
   <div class="toast-container" id="toast-container"></div>
 
   <script src="/static/js/portal.js?v=20260821v53"></script>
+  <!-- 3D Rotating Earth Particles Script -->
+  <script>
+    (function initEarthCanvas() {
+      const canvas = document.getElementById('earth-canvas');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      let width = (canvas.width = Math.min(window.innerWidth, 1200));
+      let height = (canvas.height = Math.min(window.innerHeight, 1200));
+      let radius = Math.min(width, height) * 0.38;
+
+      let rotationX = 0.2;
+      let rotationY = 0;
+      let mouseX = 0, mouseY = 0;
+
+      window.addEventListener('resize', () => {
+        width = canvas.width = Math.min(window.innerWidth, 1200);
+        height = canvas.height = Math.min(window.innerHeight, 1200);
+        radius = Math.min(width, height) * 0.38;
+      });
+
+      window.addEventListener('mousemove', (e) => {
+        mouseX = (e.clientX - window.innerWidth / 2) * 0.0002;
+        mouseY = (e.clientY - window.innerHeight / 2) * 0.0002;
+      });
+
+      // Generate 3D Sphere Points (Globe Grid & Maritime Hub Nodes)
+      const points = [];
+      const numLat = 22;
+      const numLon = 36;
+
+      for (let i = 0; i <= numLat; i++) {
+        const theta = (i * Math.PI) / numLat;
+        const sinTheta = Math.sin(theta);
+        const cosTheta = Math.cos(theta);
+
+        for (let j = 0; j < numLon; j++) {
+          const phi = (j * 2 * Math.PI) / numLon;
+          const x = radius * sinTheta * Math.cos(phi);
+          const y = radius * cosTheta;
+          const z = radius * sinTheta * Math.sin(phi);
+          
+          const isMajorNode = (i % 4 === 0 && j % 6 === 0);
+          points.push({ x, y, z, baseAlpha: isMajorNode ? 0.85 : 0.3, isMajorNode });
+        }
+      }
+
+      // Draw loop
+      function render() {
+        ctx.clearRect(0, 0, width, height);
+
+        rotationY += 0.003 + mouseX;
+        rotationX += (mouseY - rotationX) * 0.05;
+
+        const cosY = Math.cos(rotationY);
+        const sinY = Math.sin(rotationY);
+        const cosX = Math.cos(rotationX);
+        const sinX = Math.sin(rotationX);
+
+        const cx = width / 2;
+        const cy = height / 2;
+
+        // Draw ambient glow halo
+        const haloGrad = ctx.createRadialGradient(cx, cy, radius * 0.7, cx, cy, radius * 1.25);
+        haloGrad.addColorStop(0, 'rgba(255, 255, 255, 0.04)');
+        haloGrad.addColorStop(0.5, 'rgba(200, 220, 255, 0.02)');
+        haloGrad.addColorStop(1, 'transparent');
+        ctx.fillStyle = haloGrad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius * 1.25, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Project and sort points
+        const projected = [];
+        for (let i = 0; i < points.length; i++) {
+          const p = points[i];
+          const x1 = p.x * cosY - p.z * sinY;
+          const z1 = p.z * cosY + p.x * sinY;
+          const y2 = p.y * cosX - z1 * sinX;
+          const z2 = z1 * cosX + p.y * sinX;
+
+          const scale = (radius * 2) / (radius * 2 + z2);
+          const px = cx + x1 * scale;
+          const py = cy + y2 * scale;
+          const alpha = ((z2 + radius) / (2 * radius)) * p.baseAlpha;
+
+          if (z2 > -radius * 0.8) {
+            projected.push({ px, py, z: z2, alpha, isMajorNode: p.isMajorNode, scale });
+          }
+        }
+
+        // Render particles
+        for (let i = 0; i < projected.length; i++) {
+          const pt = projected[i];
+          ctx.beginPath();
+          const dotSize = pt.isMajorNode ? 2.5 * pt.scale : 1.2 * pt.scale;
+          ctx.arc(pt.px, pt.py, Math.max(0.5, dotSize), 0, Math.PI * 2);
+
+          if (pt.isMajorNode) {
+            ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(1, pt.alpha * 1.5)})`;
+            ctx.shadowColor = 'rgba(255, 255, 255, 0.8)';
+            ctx.shadowBlur = 8;
+          } else {
+            ctx.fillStyle = `rgba(255, 255, 255, ${pt.alpha})`;
+            ctx.shadowBlur = 0;
+          }
+          ctx.fill();
+        }
+
+        requestAnimationFrame(render);
+      }
+
+      render();
+    })();
+  </script>
 </body>
 </html>
 

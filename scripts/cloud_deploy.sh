@@ -246,7 +246,7 @@ prepare_configuration() {
   local llm_base_url llm_model template
   llm_base_url="${LLM_BASE_URL:-https://api.senseaudio.cn/v1}"
   [[ "$llm_base_url" == https://* ]] || die "LLM_BASE_URL must use HTTPS"
-  llm_model="${LLM_MODEL:-deepseek-v4-flash-0731}"
+  llm_model="${LLM_MODEL:-senseaudio-s2}"
   [[ "$llm_model" =~ ^[A-Za-z0-9._:/-]+$ ]] || die "LLM_MODEL contains unsupported characters"
 
   template="$CLOUD_DIR/Caddyfile.$TLS_MODE"
