@@ -48,3 +48,8 @@ def test_frontend_concurrency_limits_match_backend_constants():
     assert 'id="ct-concurrency"' in html
     assert 'min="1" max="30" step="1"' in html
     assert f"const MAX_TENANT_CONCURRENCY = {MAX_TENANT_CONCURRENCY};" in javascript
+    assert "adminFetch('/admin/tasks/statuses'" in javascript
+    assert "/admin/tasks?page=2&page_size=100" not in javascript
+    assert "120000" not in html
+    assert "legacyBenchmarkImplementationNotUsed" not in html
+    assert '/static/js/app.js?v=20260821v62' in html

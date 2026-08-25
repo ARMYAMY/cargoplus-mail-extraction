@@ -1029,21 +1029,31 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       tbody.innerHTML = keys.map(k => {
-        const fullKey = k.raw_api_key || k.raw_key || k.key_prefix;
+        const fullKey = [k.raw_key, k.raw_api_key]
+          .find(value => typeof value === 'string' && value.length > 20) || '';
+        const hasFullKey = Boolean(fullKey);
         const displayKey = k.key_prefix ? `${k.key_prefix}...` : (fullKey ? `${fullKey.substring(0, 11)}...` : '-');
+
+        let keyCopyBtn = '';
+        if (hasFullKey) {
+          keyCopyBtn = `<button type="button" class="btn btn-xs btn-primary btn-copy-key-val" data-key="${escapeHtml(fullKey)}" title="复制完整 55 位 API Key">复制 Key</button>`;
+        } else {
+          keyCopyBtn = `<button type="button" class="btn btn-xs btn-outline-warning btn-legacy-key-hint" title="历史旧密钥仅单向哈希加密存储，无法还原明文。建议生成新 Key 使用">旧版单向加密</button>`;
+        }
+
         return `
         <tr>
           <td style="white-space:nowrap;"><strong>${escapeHtml(k.name || '默认密钥')}</strong></td>
           <td style="white-space:nowrap;">
             <div style="display:inline-flex; align-items:center; gap:8px;">
               <code style="color:#38bdf8; font-size:0.82rem; font-family:var(--font-mono);">${escapeHtml(displayKey)}</code>
-              ${fullKey ? `<button type="button" class="btn btn-xs btn-secondary btn-copy-key-val" data-key="${escapeHtml(fullKey)}" title="复制完整 API Key">复制</button>` : ''}
+              ${keyCopyBtn}
             </div>
           </td>
           <td style="white-space:nowrap;">
             <div style="display:inline-flex; align-items:center; gap:8px;">
               <span style="font-family:var(--font-mono); font-size:0.8rem; color:#fbbf24;">${escapeHtml(k.api_secret ? k.api_secret.substring(0, 10) + '...' : '-')}</span>
-              ${k.api_secret ? `<button type="button" class="btn btn-xs btn-secondary btn-copy-secret-val" data-secret="${escapeHtml(k.api_secret)}" title="复制完整 Secret">复制</button>` : ''}
+              ${k.api_secret ? `<button type="button" class="btn btn-xs btn-secondary btn-copy-secret-val" data-secret="${escapeHtml(k.api_secret)}" title="复制完整 Secret">复制 Secret</button>` : ''}
             </div>
           </td>
           <td style="white-space:nowrap; text-align:center;">${k.is_active ? '<span class="badge badge-success">正常</span>' : '<span class="badge badge-danger">已吊销</span>'}</td>
@@ -1059,7 +1069,17 @@ document.addEventListener('DOMContentLoaded', () => {
       document.querySelectorAll('.btn-copy-key-val').forEach(btn => {
         btn.addEventListener('click', () => {
           const keyVal = btn.dataset.key || '';
-          copyToClipboard(keyVal, 'API Key 已成功复制！');
+          if (keyVal.length > 20) {
+            copyToClipboard(keyVal, '完整 API Key 已成功复制到剪贴板！');
+          } else {
+            showToast('warning', '该 Key 为历史加密版本，未留存明文，请点击右上角生成新 Key 使用！');
+          }
+        });
+      });
+
+      document.querySelectorAll('.btn-legacy-key-hint').forEach(btn => {
+        btn.addEventListener('click', () => {
+          showToast('warning', '该 Key 为历史版本创建（仅哈希存储），无法反解明文。请点击右上角「生成新 API Key」即可获得完整明文密钥并随时复制！');
         });
       });
 
@@ -1955,60 +1975,103 @@ MEAS: 68.000 CBM`;
       statusBadge.textContent = '后台异步消费中...';
 
       // Poll tasks until completed
-      let completedCount = 0;
-      let successCount = 0;
-      const pollTimer = setInterval(async () => {
-        try {
-          const checkRes = await adminFetch(`/admin/tasks?page=1&page_size=100`);
-          if (!checkRes.ok) throw new Error(`任务状态查询失败 (HTTP ${checkRes.status})`);
-          const checkData = await checkRes.json();
-          const items = checkData.items || [];
+      const finishedTasksMap = new Map(); // taskId -> status
+      const totalSubmitted = submittedTaskIds.length;
+      const dynamicTimeoutMs = Math.max(300000, totalSubmitted * 6000); // at least 5 mins, 6s per task
+      let pollTimer = null;
+      let pollInFlight = false;
+      let pollingFinished = false;
 
-          completedCount = 0;
-          successCount = 0;
-          for (let tid of submittedTaskIds) {
-            const t = items.find((item) => item.id === tid);
-            if (t && (t.status === 'SUCCESS' || t.status === 'FAILED')) {
-              completedCount++;
-              if (t.status === 'SUCCESS') successCount++;
+      const finishBenchmark = (timedOut, successCount, completedCount, timeoutReason = '') => {
+        if (pollingFinished) return;
+        pollingFinished = true;
+        if (pollTimer) clearInterval(pollTimer);
+
+        const totalElapsedSec = Math.max((Date.now() - startTime) / 1000, 0.001);
+        const failedCount = completedCount - successCount;
+        const unfinishedCount = totalSubmitted - completedCount;
+        const throughput = completedCount / totalElapsedSec;
+        progressBar.style.width = '100%';
+        progressText.textContent = timedOut
+          ? `压测超时: ${completedCount} / ${totalSubmitted} 完成`
+          : `压测完成: ${completedCount} / ${totalSubmitted} 完成`;
+        statusBadge.textContent = timedOut ? '压测超时' : '压测完成';
+        statusBadge.className = timedOut ? 'text-warning' : 'text-success';
+        btnStartBench.disabled = false;
+
+        logText += `\n========================================\n`;
+        logText += `📊 并发压测完成总结报告:\n`;
+        logText += `总提交任务: ${totalSubmitted}\n`;
+        logText += `提交失败数: ${failedSubmissionCount}\n`;
+        logText += `成功完成数: ${successCount} (${((successCount / totalSubmitted) * 100).toFixed(1)}%)\n`;
+        logText += `执行失败数: ${failedCount}\n`;
+        if (unfinishedCount > 0) logText += `超时未完成数: ${unfinishedCount}\n`;
+        if (timeoutReason) logText += `超时原因: ${timeoutReason}\n`;
+        logText += `总耗时: ${totalElapsedSec.toFixed(2)} 秒\n`;
+        logText += `已完成吞吐率 (TPS): ${throughput.toFixed(2)} 封/秒\n`;
+        logText += `折合日处理量: ${(throughput * 86400).toFixed(0)} 封/天\n`;
+        const configuredUnitPrice = Number(selectedTenant.unit_price);
+        const unitPrice = Number.isFinite(configuredUnitPrice) ? configuredUnitPrice : 0.5;
+        logText += `扣费对账: ¥${(successCount * unitPrice).toFixed(2)} (成功 ${successCount} 次 × ${unitPrice.toFixed(2)} 元)\n`;
+        logText += `========================================\n`;
+        liveLog.textContent = logText;
+        liveLog.scrollTop = liveLog.scrollHeight;
+
+        loadDashboardStats();
+        loadTasksTable();
+        loadTenantsTable();
+      };
+
+      const pollTaskStatuses = async () => {
+        if (pollInFlight || pollingFinished) return;
+        pollInFlight = true;
+        try {
+          const checkRes = await adminFetch('/admin/tasks/statuses', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ task_ids: submittedTaskIds }),
+          });
+          if (!checkRes.ok) throw new Error(`任务状态查询失败 (HTTP ${checkRes.status})`);
+          const items = await checkRes.json();
+
+          for (const it of items) {
+            if (it.status === 'SUCCESS' || it.status === 'FAILED') {
+              finishedTasksMap.set(it.id, it.status);
             }
           }
 
-          const pct = Math.min(95, Math.round(30 + (completedCount / submittedTaskIds.length) * 65));
+          const completedCount = finishedTasksMap.size;
+          let successCount = 0;
+          for (const s of finishedTasksMap.values()) {
+            if (s === 'SUCCESS') successCount++;
+          }
+
+          const pct = Math.min(95, Math.round(30 + (completedCount / totalSubmitted) * 65));
           progressBar.style.width = `${pct}%`;
-          progressText.textContent = `正在消费中: ${completedCount} / ${submittedTaskIds.length} 完成 (成功: ${successCount})`;
+          progressText.textContent = `正在消费中: ${completedCount} / ${totalSubmitted} 完成 (成功: ${successCount})`;
 
-          const timedOut = Date.now() - startTime > 120000;
-          if (completedCount >= submittedTaskIds.length || timedOut) {
-            clearInterval(pollTimer);
-            const totalElapsedSec = ((Date.now() - startTime) / 1000).toFixed(2);
-            progressBar.style.width = '100%';
-            statusBadge.textContent = timedOut ? '压测超时' : '压测完成';
-            statusBadge.className = timedOut ? 'text-warning' : 'text-success';
-            btnStartBench.disabled = false;
-
-            logText += `\n========================================\n`;
-            logText += `📊 并发压测完成总结报告:\n`;
-            logText += `总提交任务: ${submittedTaskIds.length}\n`;
-            logText += `提交失败数: ${failedSubmissionCount}\n`;
-            logText += `成功完成数: ${successCount} (${((successCount/submittedTaskIds.length)*100).toFixed(1)}%)\n`;
-            logText += `总耗时: ${totalElapsedSec} 秒\n`;
-            logText += `吞吐率 (TPS): ${(submittedTaskIds.length / totalElapsedSec).toFixed(2)} 封/秒\n`;
-            logText += `折合日处理量: ${((submittedTaskIds.length / totalElapsedSec) * 86400).toFixed(0)} 封/天\n`;
-            const unitPrice = Number(selectedTenant.unit_price);
-            logText += `扣费对账: ¥${(successCount * unitPrice).toFixed(2)} (成功 ${successCount} 次 × ${unitPrice.toFixed(2)} 元)\n`;
-            logText += `========================================\n`;
-            liveLog.textContent = logText;
-            liveLog.scrollTop = liveLog.scrollHeight;
-
-            loadDashboardStats();
-            loadTasksTable();
-            loadTenantsTable();
+          const elapsedMs = Date.now() - startTime;
+          const timedOut = elapsedMs > dynamicTimeoutMs;
+          if (completedCount >= totalSubmitted || timedOut) {
+            finishBenchmark(timedOut, successCount, completedCount);
           }
         } catch (pollErr) {
           console.error(pollErr);
+          if (Date.now() - startTime > dynamicTimeoutMs) {
+            const completedCount = finishedTasksMap.size;
+            const successCount = Array.from(finishedTasksMap.values())
+              .filter(status => status === 'SUCCESS').length;
+            finishBenchmark(true, successCount, completedCount, pollErr.message);
+          } else {
+            progressText.textContent = `任务状态查询暂时失败，正在重试: ${pollErr.message}`;
+          }
+        } finally {
+          pollInFlight = false;
         }
-      }, 1500);
+      };
+
+      pollTimer = setInterval(pollTaskStatuses, 1500);
+      pollTaskStatuses();
     });
   }
 

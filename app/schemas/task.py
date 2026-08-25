@@ -69,6 +69,15 @@ class TaskFeedbackSummary(BaseModel):
     review_comment: Optional[str] = None
 
 
+class TaskStatusBatchRequest(BaseModel):
+    task_ids: List[str] = Field(..., min_length=1, max_length=100)
+
+
+class TaskStatusItem(BaseModel):
+    id: str
+    status: str
+
+
 class TaskDetailResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

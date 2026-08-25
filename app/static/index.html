@@ -101,131 +101,6 @@ FREIGHT TERM: PREPAID`;
     async function startBenchmarkTest() {
       document.getElementById('btn-start-bench')?.click();
     }
-
-    async function legacyBenchmarkImplementationNotUsed() {
-      const taskCount = parseInt(document.getElementById('bench-task-count')?.value) || 10;
-      const concurrency = parseInt(document.getElementById('bench-concurrency-limit')?.value) || 10;
-      const progressSection = document.getElementById('bench-progress-section');
-      const progressBar = document.getElementById('bench-progress-bar');
-      const progressText = document.getElementById('bench-progress-text');
-      const statusBadge = document.getElementById('bench-status-badge');
-      const liveLog = document.getElementById('bench-live-log');
-      const btnStart = document.getElementById('btn-start-bench');
-
-      if (progressSection) progressSection.style.display = 'block';
-      if (progressBar) progressBar.style.width = '5%';
-      if (progressText) progressText.textContent = `正在并发提交 ${taskCount} 个任务...`;
-      if (statusBadge) {
-        statusBadge.textContent = '提交入队中...';
-        statusBadge.className = 'text-warning';
-      }
-      if (btnStart) btnStart.disabled = true;
-
-      const sampleDocs = [
-        { subject: "Booking - MSC - Yantian to Hamburg", body: "Please arrange booking. Freight prepaid.", text: "SHIPPER: GLORY SHIPPING CO.\nCONSIGNEE: EURO LOGISTICS\nPOL: YANTIAN\nPOD: HAMBURG\nCONTAINER: MSCU9988776 / 40HQ\nGOODS: AUTOMOTIVE PARTS 汽车零部件\nPACKAGES: 420 CARTONS\nG.W.: 8,500.00 KGS\nMEAS: 58.5 CBM" },
-        { subject: "Bkg Ref: COSCO - Ningbo to Long Beach", body: "FCL shipment booking. CY-CY.", text: "SHIPPER: NINGBO TEXTILE CORP.\nCONSIGNEE: PACIFIC APPAREL\nPOL: NINGBO\nPOD: LONG BEACH\nCONTAINER: CCLU1234567 / 20GP\nGOODS: COTTON SHIRTS 纯棉衬衫\nPACKAGES: 800 CARTONS\nG.W.: 6,200.00 KGS\nMEAS: 28.0 CBM" },
-        { subject: "Booking Memo - CMA CGM - Qingdao to Rotterdam", body: "Reefer container booking.", text: "SHIPPER: QINGDAO SEAFOOD\nCONSIGNEE: ROTTERDAM COLD STORE\nPOL: QINGDAO\nPOD: ROTTERDAM\nCONTAINER: CMAU5566778 / 40RF\nGOODS: FROZEN FISH 冷冻鱼\nPACKAGES: 1200 BOXES\nG.W.: 22,000.00 KGS\nMEAS: 60.0 CBM" },
-      ];
-
-      const submittedTaskIds = [];
-      let logText = `[${new Date().toLocaleTimeString()}] 🚀 启动并发压测: 总任务 ${taskCount}, 并发 ${concurrency}\n`;
-      if (liveLog) liveLog.textContent = logText;
-
-      const startTime = Date.now();
-      const adminToken = localStorage.getItem('cargo_admin_token') || '';
-
-      // Submit tasks
-      for (let i = 0; i < taskCount; i++) {
-        const sample = sampleDocs[i % sampleDocs.length];
-        try {
-          const res = await fetch('/api/v1/extract/async', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${adminToken}`,
-              'X-Admin-Secret': adminToken,
-            },
-            body: JSON.stringify({
-              mail_subject: `[压测 #${i+1}] ${sample.subject}`,
-              mail_body: sample.body,
-              attachments: [{ filename: `doc_${i+1}.txt`, content_type: 'text/plain', text: sample.text, tables: [], ocr_text: '' }],
-            }),
-          });
-          if (res.ok) {
-            const d = await res.json();
-            submittedTaskIds.push(d.task_id);
-            logText += `[${new Date().toLocaleTimeString()}] 任务 #${i+1} 已入队: ${d.task_id}\n`;
-          }
-        } catch (err) {
-          logText += `[${new Date().toLocaleTimeString()}] 任务 #${i+1} 提交失败: ${err.message}\n`;
-        }
-        if (liveLog) {
-          liveLog.textContent = logText;
-          liveLog.scrollTop = liveLog.scrollHeight;
-        }
-      }
-
-      if (progressBar) progressBar.style.width = '30%';
-      if (progressText) progressText.textContent = `全部 ${submittedTaskIds.length} 个任务已入队，Worker 正在并发消费...`;
-      if (statusBadge) statusBadge.textContent = '后台异步消费中...';
-
-      // Poll tasks until completed
-      let completedCount = 0;
-      let successCount = 0;
-      const pollTimer = setInterval(async () => {
-        try {
-          const checkRes = await fetch(`/admin/tasks?page=1&page_size=100`, {
-            headers: {
-              'Authorization': `Bearer ${adminToken}`,
-              'X-Admin-Secret': adminToken,
-            }
-          });
-          const checkData = await checkRes.json();
-          const items = checkData.items || [];
-
-          completedCount = 0;
-          successCount = 0;
-          for (let tid of submittedTaskIds) {
-            const t = items.find((item) => item.id === tid);
-            if (t && (t.status === 'SUCCESS' || t.status === 'FAILED')) {
-              completedCount++;
-              if (t.status === 'SUCCESS') successCount++;
-            }
-          }
-
-          const pct = Math.min(95, Math.round(30 + (completedCount / Math.max(1, submittedTaskIds.length)) * 65));
-          if (progressBar) progressBar.style.width = `${pct}%`;
-          if (progressText) progressText.textContent = `正在消费中: ${completedCount} / ${submittedTaskIds.length} 完成 (成功: ${successCount})`;
-
-          if (completedCount >= submittedTaskIds.length || (Date.now() - startTime > 120000)) {
-            clearInterval(pollTimer);
-            const totalElapsedSec = ((Date.now() - startTime) / 1000).toFixed(2);
-            if (progressBar) progressBar.style.width = '100%';
-            if (statusBadge) {
-              statusBadge.textContent = '压测完成';
-              statusBadge.className = 'text-success';
-            }
-            if (btnStart) btnStart.disabled = false;
-
-            logText += `\n========================================\n`;
-            logText += `📊 并发压测完成总结报告:\n`;
-            logText += `总提交任务: ${submittedTaskIds.length}\n`;
-            logText += `成功完成数: ${successCount} (${((successCount/Math.max(1, submittedTaskIds.length))*100).toFixed(1)}%)\n`;
-            logText += `总耗时: ${totalElapsedSec} 秒\n`;
-            logText += `吞吐率 (TPS): ${(submittedTaskIds.length / Math.max(0.1, totalElapsedSec)).toFixed(2)} 封/秒\n`;
-            logText += `折合日处理量: ${((submittedTaskIds.length / Math.max(0.1, totalElapsedSec)) * 86400).toFixed(0)} 封/天\n`;
-            logText += `扣费对账: ¥${(successCount * 0.5).toFixed(2)} (成功 ${successCount} 次 × 0.50 元)\n`;
-            logText += `========================================\n`;
-            if (liveLog) {
-              liveLog.textContent = logText;
-              liveLog.scrollTop = liveLog.scrollHeight;
-            }
-          }
-        } catch (pollErr) {
-          console.error(pollErr);
-        }
-      }, 1500);
-    }
   </script>
 </head>
 
@@ -1736,10 +1611,10 @@ FREIGHT TERM: PREPAID`;
 
         <!-- Newly Generated Key Alert Box -->
         <div id="new-key-alert" style="display:none; background:rgba(16, 185, 129, 0.12); border:1px solid rgba(16, 185, 129, 0.35); border-radius:12px; padding:16px; margin-bottom:18px;">
-          <div style="color:#34d399; font-weight:600; font-size:0.9rem; margin-bottom:6px;">✨ 新 API Key 生成成功 (请立即复制保存，关闭后将不再显示完整密文):</div>
+          <div style="color:#34d399; font-weight:600; font-size:0.9rem; margin-bottom:6px;">✨ 新 API Key 生成成功 (已存入数据库，可随时在此复制):</div>
           <div class="copy-input-group" style="margin-bottom:8px;">
             <input type="text" id="new-key-full-val" class="form-control font-mono" readonly style="color:#38bdf8; font-weight:600;">
-            <button type="button" class="btn btn-primary" onclick="copyToClipboard(document.getElementById('new-key-full-val').value)">一键复制 Key</button>
+            <button type="button" class="btn btn-primary" onclick="copyToClipboard(document.getElementById('new-key-full-val').value, 'API Key 已成功复制！')">一键复制 Key</button>
           </div>
           <div style="font-size:0.75rem; color:var(--text-secondary);">Webhook 签名 Secret: <code id="new-key-secret-val" style="color:#fbbf24;"></code></div>
         </div>
@@ -1963,7 +1838,7 @@ FREIGHT TERM: PREPAID`;
 
   <div class="toast-container" id="toast-container"></div>
 
-  <script src="/static/js/app.js?v=20260824v58"></script>
+  <script src="/static/js/app.js?v=20260821v62"></script>
 
 
 </body>

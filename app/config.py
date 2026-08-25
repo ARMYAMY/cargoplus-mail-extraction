@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str = "https://api.senseaudio.cn/v1"
     LLM_API_KEY: str = ""
     LLM_API_KEY_FILE: str = ""
-    LLM_MODEL: str = "deepseek-v4-flash-0731"
+    LLM_MODEL: str = "senseaudio-s2"
     LLM_FALLBACK_MODEL: str = "deepseek-v4-flash-0731"
     LLM_TEMPERATURE: float = Field(default=0.0, ge=0.0, le=2.0)
     LLM_TIMEOUT_SECONDS: int = Field(default=60, ge=5, le=600)

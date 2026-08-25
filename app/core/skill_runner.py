@@ -100,11 +100,19 @@ class SkillRunner:
 
     @staticmethod
     def _clean_json_response(content: str) -> str:
-        """Strips markdown code fence ```json ... ``` if present."""
+        """Strips markdown code fence ```json ... ``` or extracts outermost {...} block."""
+        if not content:
+            return ""
         content = content.strip()
         match = JSON_BLOCK_RE.search(content)
         if match:
-            return match.group(1).strip()
+            content = match.group(1).strip()
+
+        # Fallback: locate outermost JSON object { ... }
+        start = content.find("{")
+        end = content.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return content[start : end + 1].strip()
         return content
 
     @staticmethod
@@ -212,8 +220,18 @@ class SkillRunner:
                         data = resp.json()
                         choices = data.get("choices", [])
                         if choices:
-                            await record_llm_attempt("success", time.monotonic() - attempt_started)
-                            return choices[0].get("message", {}).get("content", "").strip()
+                            raw_content = choices[0].get("message", {}).get("content", "")
+                            if raw_content and raw_content.strip():
+                                await record_llm_attempt("success", time.monotonic() - attempt_started)
+                                return raw_content.strip()
+                            # Choices present but content is empty string (transient upstream issue)
+                            last_error = "LLM returned HTTP 200 with empty content"
+                            logger.warning(
+                                "LLM HTTP 200 returned empty content on attempt %s; retrying",
+                                attempt + 1,
+                            )
+                            await asyncio.sleep(min(2 ** attempt, 10) + random.uniform(0, 0.5))
+                            continue
                         raise ValueError("LLM returned HTTP 200 without a completion choice")
                     elif resp.status_code == 429 or resp.status_code >= 500:
                         outcome = "rate_limited" if resp.status_code == 429 else "server_error"
@@ -353,22 +371,40 @@ class SkillRunner:
         response_text = await self.call_llm(prompt, progress_callback=progress_callback)
         if progress_callback:
             await progress_callback("PARSING_MODEL_JSON", {})
+
+        draft_json = None
         try:
             draft_json = self._parse_json_object_response(response_text)
         except (json.JSONDecodeError, ValueError) as jde:
-            logger.warning("Initial LLM JSON parse failed: %s", jde)
-            # Try repairing with validate prompt
+            logger.warning(
+                "Initial LLM JSON parse failed: %s (Raw content: %r)",
+                jde,
+                response_text[:200],
+            )
+            # Preserve the upstream empty-response safety net while using the
+            # stricter multi-object Cargo JSON parser for both attempts.
             if self.validate_prompt_template:
-                cleaned_json_str = self._clean_json_response(response_text)
-                val_prompt = self.build_validate_prompt(cleaned_json_str, [f"JSON syntax error: {str(jde)}"])
-                repaired_text = await self.call_llm(val_prompt, progress_callback=progress_callback)
-                if progress_callback:
-                    await progress_callback("PARSING_MODEL_JSON", {"repair": True})
-                draft_json = self._parse_json_object_response(repaired_text)
-            else:
-                raise ValueError(f"Invalid JSON returned from LLM: {jde}")
+                try:
+                    cleaned_json_str = self._clean_json_response(response_text)
+                    repair_error = (
+                        "LLM output was empty; please extract valid JSON directly."
+                        if not cleaned_json_str
+                        else f"JSON syntax error: {str(jde)}"
+                    )
+                    val_prompt = self.build_validate_prompt(cleaned_json_str, [repair_error])
+                    repaired_text = await self.call_llm(
+                        val_prompt,
+                        progress_callback=progress_callback,
+                    )
+                    if progress_callback:
+                        await progress_callback("PARSING_MODEL_JSON", {"repair": True})
+                    draft_json = self._parse_json_object_response(repaired_text)
+                except Exception as repair_err:
+                    logger.warning("Repair LLM call failed: %s", repair_err)
 
         if not isinstance(draft_json, dict):
+            if draft_json is None:
+                logger.warning("LLM failed to return parseable JSON, falling back to empty structured draft")
             draft_json = {}
 
         return draft_json

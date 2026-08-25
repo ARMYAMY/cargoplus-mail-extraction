@@ -282,8 +282,10 @@ async def init_db():
                 "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS lease_owner VARCHAR(128);",
                 "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;",
                 "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;",
-                "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS feedback_id VARCHAR(64);",
-                "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS source_tenant_id VARCHAR(64);",
+                "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS feedback_id VARCHAR(64) "
+                "REFERENCES task_feedbacks(id) ON DELETE SET NULL;",
+                "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS source_tenant_id VARCHAR(64) "
+                "REFERENCES tenants(id) ON DELETE CASCADE;",
                 "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS error_category VARCHAR(32) DEFAULT 'UNSPECIFIED';",
                 "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS lifecycle_status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE';",
                 "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS evaluation_run_id VARCHAR(64);",
