@@ -122,6 +122,8 @@ async def lifespan(app: FastAPI):
     settings.validate_security_settings()
     await init_db()
     await load_dynamic_system_config()
+    from app.services.admin_job_service import AdminJobService
+    await AdminJobService.mark_interrupted_jobs()
     if settings.SEED_DEMO_TENANT and settings.ENVIRONMENT.lower() != "production":
         await seed_initial_demo_tenant()
     await task_queue.start()

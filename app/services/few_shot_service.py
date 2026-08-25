@@ -8,6 +8,29 @@ from app.models.feedback import FewShotExample
 logger = logging.getLogger(__name__)
 
 class FewShotService:
+    DOCUMENT_TYPE_MARKERS = (
+        ("BILL_OF_LADING", ("BILL OF LADING", "提单")),
+        ("BOOKING_CONFIRMATION", ("BOOKING CONFIRMATION", "订舱确认")),
+        ("SHIPPING_INSTRUCTION", ("SHIPPING INSTRUCTION", "SI INSTRUCTION", "补料", "托书")),
+        ("COMMERCIAL_INVOICE", ("COMMERCIAL INVOICE", "商业发票")),
+        ("PACKING_LIST", ("PACKING LIST", "装箱单")),
+    )
+
+    @classmethod
+    def detect_document_type(cls, payload) -> str:
+        parts = [getattr(payload, "mail_subject", ""), getattr(payload, "mail_body", "")]
+        for attachment in getattr(payload, "attachments", []) or []:
+            parts.extend([
+                getattr(attachment, "filename", ""),
+                getattr(attachment, "text", ""),
+                getattr(attachment, "ocr_text", ""),
+            ])
+        content = "\n".join(str(part or "") for part in parts).upper()[:200000]
+        for doc_type, markers in cls.DOCUMENT_TYPE_MARKERS:
+            if any(marker.upper() in content for marker in markers):
+                return doc_type
+        return "GENERAL"
+
     @staticmethod
     def invalidate_cache():
         # Samples are queried on every extraction so changes are immediately
@@ -30,7 +53,10 @@ class FewShotService:
         preventing customer document content from crossing tenant boundaries.
         """
         safe_limit = max(1, min(int(limit), 10))
-        stmt = select(FewShotExample).where(FewShotExample.is_active.is_(True))
+        stmt = select(FewShotExample).where(
+            FewShotExample.is_active.is_(True),
+            FewShotExample.lifecycle_status == "ACTIVE",
+        )
         if tenant_id:
             stmt = stmt.where(
                 or_(

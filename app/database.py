@@ -99,6 +99,57 @@ async def init_db():
                 await conn.execute(
                     text("ALTER TABLE few_shot_examples ADD COLUMN source_tenant_id VARCHAR(64)")
                 )
+            if "error_category" not in few_shot_column_names:
+                await conn.execute(text("ALTER TABLE few_shot_examples ADD COLUMN error_category VARCHAR(32) DEFAULT 'UNSPECIFIED'"))
+            if "lifecycle_status" not in few_shot_column_names:
+                await conn.execute(text("ALTER TABLE few_shot_examples ADD COLUMN lifecycle_status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE'"))
+            if "evaluation_run_id" not in few_shot_column_names:
+                await conn.execute(text("ALTER TABLE few_shot_examples ADD COLUMN evaluation_run_id VARCHAR(64)"))
+            if "parent_id" not in few_shot_column_names:
+                await conn.execute(text("ALTER TABLE few_shot_examples ADD COLUMN parent_id VARCHAR(64)"))
+
+            benchmark_columns = await conn.execute(text("PRAGMA table_info(benchmark_cases)"))
+            benchmark_column_names = {row[1] for row in benchmark_columns}
+            if "source_files" not in benchmark_column_names:
+                await conn.execute(text("ALTER TABLE benchmark_cases ADD COLUMN source_files JSON"))
+            if "source_hashes" not in benchmark_column_names:
+                await conn.execute(text("ALTER TABLE benchmark_cases ADD COLUMN source_hashes JSON"))
+            if "verification_status" not in benchmark_column_names:
+                await conn.execute(text("ALTER TABLE benchmark_cases ADD COLUMN verification_status VARCHAR(32) NOT NULL DEFAULT 'DRAFT'"))
+            if "verified_by" not in benchmark_column_names:
+                await conn.execute(text("ALTER TABLE benchmark_cases ADD COLUMN verified_by VARCHAR(64)"))
+            if "verified_at" not in benchmark_column_names:
+                await conn.execute(text("ALTER TABLE benchmark_cases ADD COLUMN verified_at DATETIME"))
+            if "dataset_role" not in benchmark_column_names:
+                await conn.execute(text("ALTER TABLE benchmark_cases ADD COLUMN dataset_role VARCHAR(16) NOT NULL DEFAULT 'TRAIN'"))
+            await conn.execute(text(
+                "UPDATE benchmark_cases SET verification_status = 'DRAFT', is_active = 0 "
+                "WHERE verified_at IS NULL AND verification_status = 'VERIFIED'"
+            ))
+            await conn.execute(text(
+                "UPDATE benchmark_cases SET is_active = 0 "
+                "WHERE verification_status = 'DRAFT'"
+            ))
+
+            feedback_columns = await conn.execute(text("PRAGMA table_info(task_feedbacks)"))
+            feedback_column_names = {row[1] for row in feedback_columns}
+            if "document_type" not in feedback_column_names:
+                await conn.execute(text("ALTER TABLE task_feedbacks ADD COLUMN document_type VARCHAR(64) NOT NULL DEFAULT 'GENERAL'"))
+
+            prompt_columns = await conn.execute(text("PRAGMA table_info(prompt_versions)"))
+            prompt_column_names = {row[1] for row in prompt_columns}
+            if "evidence_feedback_ids" not in prompt_column_names:
+                await conn.execute(text("ALTER TABLE prompt_versions ADD COLUMN evidence_feedback_ids JSON"))
+            if "iteration_number" not in prompt_column_names:
+                await conn.execute(text("ALTER TABLE prompt_versions ADD COLUMN iteration_number INTEGER NOT NULL DEFAULT 1"))
+            if "source_job_id" not in prompt_column_names:
+                await conn.execute(text("ALTER TABLE prompt_versions ADD COLUMN source_job_id VARCHAR(64)"))
+            if "source_evaluation_job_id" not in prompt_column_names:
+                await conn.execute(text("ALTER TABLE prompt_versions ADD COLUMN source_evaluation_job_id VARCHAR(64)"))
+            await conn.execute(text(
+                "UPDATE prompt_versions SET iteration_number = 2 "
+                "WHERE parent_id IS NOT NULL AND iteration_number = 1"
+            ))
 
             api_key_columns = await conn.execute(text("PRAGMA table_info(api_keys)"))
             api_key_column_names = {row[1] for row in api_key_columns}
@@ -122,6 +173,8 @@ async def init_db():
                 "ON benchmark_cases(feedback_id) WHERE feedback_id IS NOT NULL",
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_few_shot_feedback_id "
                 "ON few_shot_examples(feedback_id) WHERE feedback_id IS NOT NULL",
+                "CREATE INDEX IF NOT EXISTS ix_benchmark_cases_dataset_role "
+                "ON benchmark_cases(dataset_role)",
                 "CREATE INDEX IF NOT EXISTS ix_few_shot_examples_source_tenant_id "
                 "ON few_shot_examples(source_tenant_id)",
             ):
@@ -231,6 +284,22 @@ async def init_db():
                 "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;",
                 "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS feedback_id VARCHAR(64);",
                 "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS source_tenant_id VARCHAR(64);",
+                "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS error_category VARCHAR(32) DEFAULT 'UNSPECIFIED';",
+                "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS lifecycle_status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE';",
+                "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS evaluation_run_id VARCHAR(64);",
+                "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS parent_id VARCHAR(64);",
+                "ALTER TABLE benchmark_cases ADD COLUMN IF NOT EXISTS source_files JSONB;",
+                "ALTER TABLE benchmark_cases ADD COLUMN IF NOT EXISTS source_hashes JSONB;",
+                "ALTER TABLE benchmark_cases ADD COLUMN IF NOT EXISTS verification_status VARCHAR(32) NOT NULL DEFAULT 'DRAFT';",
+                "ALTER TABLE benchmark_cases ADD COLUMN IF NOT EXISTS verified_by VARCHAR(64);",
+                "ALTER TABLE benchmark_cases ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;",
+                "ALTER TABLE benchmark_cases ADD COLUMN IF NOT EXISTS dataset_role VARCHAR(16) NOT NULL DEFAULT 'TRAIN';",
+                "ALTER TABLE task_feedbacks ADD COLUMN IF NOT EXISTS document_type VARCHAR(64) NOT NULL DEFAULT 'GENERAL';",
+                "ALTER TABLE prompt_versions ADD COLUMN IF NOT EXISTS evidence_feedback_ids JSONB;",
+                "ALTER TABLE prompt_versions ADD COLUMN IF NOT EXISTS iteration_number INTEGER NOT NULL DEFAULT 1;",
+                "ALTER TABLE prompt_versions ADD COLUMN IF NOT EXISTS source_job_id VARCHAR(64);",
+                "ALTER TABLE prompt_versions ADD COLUMN IF NOT EXISTS source_evaluation_job_id VARCHAR(64);",
+                "UPDATE prompt_versions SET iteration_number = 2 WHERE parent_id IS NOT NULL AND iteration_number = 1;",
                 "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS raw_key VARCHAR(128);",
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_tenants_contact_email ON tenants(lower(contact_email)) WHERE contact_email IS NOT NULL;",
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_billing_task_type ON billing_transactions(task_id, type) WHERE task_id IS NOT NULL;",
@@ -239,6 +308,7 @@ async def init_db():
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_task_feedback_task_id ON task_feedbacks(task_id);",
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_benchmark_feedback_id ON benchmark_cases(feedback_id) WHERE feedback_id IS NOT NULL;",
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_few_shot_feedback_id ON few_shot_examples(feedback_id) WHERE feedback_id IS NOT NULL;",
+                "CREATE INDEX IF NOT EXISTS ix_benchmark_cases_dataset_role ON benchmark_cases(dataset_role);",
                 "CREATE INDEX IF NOT EXISTS ix_few_shot_examples_source_tenant_id ON few_shot_examples(source_tenant_id);",
             )
             for statement in pg_migrations:
@@ -250,3 +320,11 @@ async def init_db():
                     logger.warning("Postgres schema update note: %s", exc)
                 else:
                     await savepoint.commit()
+            await conn.execute(text(
+                "UPDATE benchmark_cases SET verification_status = 'DRAFT', is_active = FALSE "
+                "WHERE verified_at IS NULL AND verification_status = 'VERIFIED'"
+            ))
+            await conn.execute(text(
+                "UPDATE benchmark_cases SET is_active = FALSE "
+                "WHERE verification_status = 'DRAFT'"
+            ))

@@ -38,6 +38,7 @@ class TaskFeedbackReviewRequest(BaseModel):
     auto_refund: bool = Field(True, description="是否自动执行退款冲正")
     create_few_shot: bool = Field(True, description="是否自动生成少样本样例")
     create_benchmark: bool = True
+    document_type: str = Field("GENERAL", min_length=1, max_length=64)
 
 
 class TaskFeedbackResponse(BaseModel):
@@ -108,6 +109,7 @@ class FewShotResponse(BaseModel):
 class BenchmarkCaseResponse(BaseModel):
     id: str
     doc_type: str
+    dataset_role: Literal["TRAIN", "HOLDOUT"] = "TRAIN"
     title: str
     input_text: Optional[str] = None
     raw_file_path: Optional[str] = None
@@ -117,6 +119,20 @@ class BenchmarkCaseResponse(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class BenchmarkUpdateRequest(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=255)
+    doc_type: Optional[str] = Field(None, min_length=1, max_length=64)
+    dataset_role: Optional[Literal["TRAIN", "HOLDOUT"]] = None
+    ground_truth: Optional[Dict[str, Any]] = None
+    weight: Optional[int] = Field(None, ge=1, le=100)
+    is_active: Optional[bool] = None
+    verification_status: Optional[Literal["DRAFT", "VERIFIED"]] = None
+
+    _validate_ground_truth = field_validator("ground_truth")(
+        _validate_few_shot_output
+    )
 
 
 class SystemVersionReleaseRequest(BaseModel):
@@ -129,3 +145,48 @@ class SystemVersionReleaseRequest(BaseModel):
     )
     changelog: Optional[str] = Field(None, max_length=2000, description="版本发布更新说明")
     mark_accepted_as_resolved: bool = Field(True, description="是否将当前已采纳的反馈工单全部标记为此版本解决")
+    evaluation_job_id: Optional[str] = Field(None, max_length=64, description="管理端最近一次已通过的全量金标后台任务")
+
+
+class PromptCreateRequest(BaseModel):
+    content: str = Field(..., min_length=100, max_length=131072)
+    optimization_goal: Optional[str] = Field(None, max_length=2000)
+
+
+class PromptOptimizeRequest(BaseModel):
+    optimization_goal: str = Field(..., min_length=5, max_length=2000)
+    feedback_ids: List[str] = Field(default_factory=list, max_length=200)
+
+
+class PromptRefineRequest(BaseModel):
+    evaluation_job_id: str = Field(..., min_length=3, max_length=64)
+    optimization_goal: Optional[str] = Field(None, max_length=2000)
+    optimization_directions: List[Literal[
+        "FIX_REMAINING_NON_CRITICAL",
+        "USE_NEW_FEEDBACK",
+        "SIMPLIFY_MERGE_RULES",
+        "REDUCE_GUESSING",
+        "CUSTOM",
+    ]] = Field(default_factory=list, max_length=5)
+    optimization_instruction: Optional[str] = Field(None, max_length=4000)
+    feedback_ids: List[str] = Field(default_factory=list, max_length=200)
+
+
+class PromptRuleItem(BaseModel):
+    text: str = Field(..., min_length=3, max_length=1000)
+    selected: bool = True
+    source_feedback_ids: List[str] = Field(default_factory=list, max_length=20)
+    source_case_ids: List[str] = Field(default_factory=list, max_length=100)
+    affected_fields: List[str] = Field(default_factory=list, max_length=30)
+    action: Literal["ADD", "MODIFY", "DELETE"] = "ADD"
+    target_rule: Optional[str] = Field(None, max_length=1000)
+    conflict_reason: Optional[str] = Field(None, max_length=1000)
+    diagnosis: Optional[str] = Field(None, max_length=2000)
+    error_type: Literal["PROMPT", "NORMALIZATION", "EVALUATOR", "GOLD", "OCR", "UNKNOWN"] = "UNKNOWN"
+    expected_effect: Optional[str] = Field(None, max_length=1000)
+    risk_fields: List[str] = Field(default_factory=list, max_length=30)
+    confidence: Optional[float] = Field(None, ge=0, le=1)
+
+
+class PromptFinalizeRequest(BaseModel):
+    rules: List[PromptRuleItem] = Field(..., min_length=1, max_length=20)
