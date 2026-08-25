@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Any, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from pypdf import PdfReader
 from app.services.vision_service import VisionBudget, VisionService
 
@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 def parse_pdf(
     file_path: Path,
     vision_budget: VisionBudget | None = None,
+    stage_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None,
 ) -> Tuple[str, List[Any], str]:
     """
     Parses a PDF file.
@@ -44,11 +45,23 @@ def parse_pdf(
                         )
                         break
 
+                    if stage_callback:
+                        stage_callback("PDF_TO_IMAGE", {
+                            "filename": file_path.name,
+                            "page": page_idx + 1,
+                            "image": img_idx + 1,
+                        })
                     img_bytes = img_file.data
                     if VisionService.is_valid_document_image(img_bytes):
                         if not vision_budget.try_acquire():
                             break
                         try:
+                            if stage_callback:
+                                stage_callback("VISION_OCR", {
+                                    "filename": file_path.name,
+                                    "page": page_idx + 1,
+                                    "image": img_idx + 1,
+                                })
                             img_transcription = VisionService.transcribe_image_sync(
                                 img_bytes,
                                 filename_hint=f"{file_path.name}_p{page_idx+1}_img{img_idx+1}",

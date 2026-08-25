@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/css/app.css?v=20260821v61">
+  <link rel="stylesheet" href="/static/css/app.css?v=20260824v62">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" integrity="sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg/P5HG5lF1urn4" crossorigin="anonymous"></script>
 
   <script>
@@ -817,9 +817,15 @@ FREIGHT TERM: PREPAID`;
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
               <span>动态 Few-Shot 样本库</span>
             </button>
+            <button type="button" class="btn btn-secondary" id="btn-subtab-fb-benchmark" onclick="switchFeedbackSubTab('benchmark')">
+              <span>金标评测集</span>
+            </button>
             <button type="button" class="btn btn-secondary" id="btn-subtab-fb-release" onclick="switchFeedbackSubTab('release')">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
               <span>金标自动回归评测 & 发布</span>
+            </button>
+            <button type="button" class="btn btn-secondary" id="btn-subtab-fb-prompt" onclick="switchFeedbackSubTab('prompt')">
+              <span>模型辅助提示词实验室</span>
             </button>
           </div>
         </div>
@@ -899,6 +905,7 @@ FREIGHT TERM: PREPAID`;
                   <thead>
                     <tr>
                       <th>示例名称</th>
+                      <th>适用范围</th>
                       <th>单证类型</th>
                       <th>优先级</th>
                       <th>状态</th>
@@ -908,7 +915,7 @@ FREIGHT TERM: PREPAID`;
                     </tr>
                   </thead>
                   <tbody>
-                    <tr><td colspan="7" class="text-center text-muted py-8">正在加载 Few-Shot 示例...</td></tr>
+                    <tr><td colspan="8" class="text-center text-muted py-8">正在加载 Few-Shot 示例...</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -926,6 +933,7 @@ FREIGHT TERM: PREPAID`;
                   <p style="margin: 0; font-size: 0.8rem; color: var(--text-secondary);">执行全量金标用例回归，确保修改规则与少样本后准确率提升且核心关键字段（提单号、箱号、港口、船名）无退化。</p>
                 </div>
                 <div style="display: flex; gap: 10px;">
+                  <button class="btn btn-secondary" onclick="exportBenchmarks()" id="btn-export-benchmarks">导出标准答案</button>
                   <button type="button" class="btn btn-secondary" id="btn-run-eval" onclick="triggerRegressionEvaluation()">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                     <span id="btn-run-eval-label">▶ 运行全量金标回归评测</span>
@@ -936,6 +944,7 @@ FREIGHT TERM: PREPAID`;
                   </button>
                 </div>
               </div>
+              <div id="release-gate-reason" style="margin-top:10px;color:#fbbf24;font-size:.8rem;">尚未运行最新全量金标回归，暂不可发布。</div>
 
               <!-- Evaluation Live Dashboard Result -->
               <div id="eval-result-card" style="display: none; margin-top: 20px; padding: 18px; background: rgba(0,0,0,0.35); border: 1px solid var(--border-color); border-radius: 10px;">
@@ -959,6 +968,8 @@ FREIGHT TERM: PREPAID`;
                 </div>
 
                 <div id="eval-release-gate-msg" style="padding: 10px 14px; border-radius: 8px; font-size: 0.85rem; font-weight: 600;"></div>
+                <div id="eval-layer-summary" style="display:grid;grid-template-columns:repeat(2,minmax(220px,1fr));gap:12px;margin-top:12px;"></div>
+                <div id="eval-case-details" style="margin-top:12px;font-size:0.78rem;color:var(--text-secondary);"></div>
               </div>
             </div>
           </div>
@@ -989,7 +1000,156 @@ FREIGHT TERM: PREPAID`;
             </div>
           </div>
         </div>
+
+        <!-- SubView: Gold benchmark cases -->
+        <div id="subview-fb-benchmark" style="display:none;">
+          <div class="card" style="margin-bottom:20px;">
+            <div class="card-body" style="padding:16px 20px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+              <div><h4 style="margin:0 0 4px;color:#fff;">金标评测集</h4><p style="margin:0;color:var(--text-secondary);font-size:.8rem;">优化集可供 AI 学习；保密测试集只参加最终门禁，不向 AI 暴露答案和失败明细。</p></div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <span class="badge badge-info">优化集 <strong id="benchmark-train-count">0</strong></span>
+                <span class="badge badge-warning">保密集 <strong id="benchmark-holdout-count">0</strong></span>
+                <select id="benchmark-role-filter" class="form-control" style="width:auto;min-width:130px;" onchange="renderBenchmarkRows()"><option value="">全部用途</option><option value="TRAIN">优化集</option><option value="HOLDOUT">保密测试集</option></select>
+                <button class="btn btn-secondary" onclick="loadBenchmarks()">刷新</button>
+              </div>
+            </div>
+          </div>
+          <div class="card"><div class="card-body" style="padding:0;"><div class="table-responsive">
+            <table class="data-table" id="table-benchmarks"><thead><tr>
+              <th>案例</th><th>数据用途</th><th>单证类型</th><th>原始文件</th><th>权重</th><th>状态</th><th>最近准确率</th><th>最近错误</th><th>操作</th>
+            </tr></thead><tbody><tr><td colspan="9" class="text-center text-muted py-8">正在加载金标案例...</td></tr></tbody></table>
+          </div></div></div>
+        </div>
+
+        <!-- SubView 4: Prompt optimization workbench -->
+        <div id="subview-fb-prompt" class="prompt-workbench" style="display:none;">
+          <header class="prompt-hero">
+            <div class="prompt-hero-head">
+              <div>
+                <div class="prompt-eyebrow">Prompt Optimization Workbench</div>
+                <h3 class="prompt-title">模型辅助提示词工作台</h3>
+                <p class="prompt-subtitle">以已审核反馈和失败金标为证据，人工审核每条规则，通过完整回归后再发布。</p>
+              </div>
+              <div class="prompt-version-pills">
+                <div class="prompt-version-pill"><span>生产版本</span><strong id="prompt-current-production">加载中</strong></div>
+                <div class="prompt-version-pill"><span>当前选择</span><strong id="prompt-current-selection">加载中</strong></div>
+                <div class="prompt-version-pill"><span>版本状态</span><strong id="prompt-current-status">—</strong></div>
+              </div>
+            </div>
+            <div class="prompt-steps" id="prompt-workflow-steps">
+              <div class="prompt-step active" data-step="evidence"><span class="prompt-step-number">1</span><span>选择证据</span></div>
+              <div class="prompt-step" data-step="diagnosis"><span class="prompt-step-number">2</span><span>AI 诊断</span></div>
+              <div class="prompt-step" data-step="review"><span class="prompt-step-number">3</span><span>审核规则</span></div>
+              <div class="prompt-step" data-step="quick"><span class="prompt-step-number">4</span><span>快速回归</span></div>
+              <div class="prompt-step" data-step="full"><span class="prompt-step-number">5</span><span>完整回归</span></div>
+            </div>
+          </header>
+
+          <div class="prompt-workbench-grid">
+            <main class="prompt-main">
+              <section class="prompt-section" id="prompt-section-evidence">
+                <div class="prompt-section-head">
+                  <div><h4><span class="prompt-section-index">01</span>明确优化目标与证据</h4><p class="prompt-section-note">仅使用已审核反馈；生成前可核对实际发送给模型的数据。</p></div>
+                  <button class="btn btn-sm btn-secondary" onclick="previewPromptEvidence()">预览证据包</button>
+                </div>
+                <label style="display:block;margin-top:14px;">本次优化目标</label>
+                <textarea id="prompt-optimization-goal" class="form-control" rows="3" placeholder="例如：减少 Carrier 猜测；ContainerInfo 仅在同一箱号行有明确件重尺时填写。"></textarea>
+                <div class="prompt-filter-grid">
+                  <input id="prompt-filter-field" class="form-control" placeholder="字段，如 ContainerInfo">
+                  <select id="prompt-filter-tenant" class="form-control"><option value="">全部租户</option></select>
+                  <select id="prompt-filter-doc-type" class="form-control"><option value="">全部单证类型</option></select>
+                  <select id="prompt-filter-error" class="form-control"><option value="">全部错误类型</option></select>
+                </div>
+                <div class="prompt-action-row">
+                  <button class="btn btn-xs btn-secondary" onclick="applyPromptFeedbackFilters()">应用筛选</button>
+                  <button class="btn btn-xs btn-secondary" onclick="selectAllFilteredFeedbacks()">全选筛选结果</button>
+                  <button class="btn btn-xs btn-secondary" onclick="selectSameFieldFeedbacks()">全选同类字段</button>
+                </div>
+                <div id="prompt-feedback-options" class="prompt-feedback-list">正在加载可用反馈...</div>
+                <div id="prompt-feedback-summary" class="prompt-section-note" style="margin-top:9px;"></div>
+                <div id="prompt-evidence-preview" class="prompt-evidence-preview" style="display:none;max-height:360px;overflow:auto;"></div>
+                <div class="prompt-action-row">
+                  <button id="btn-optimize-prompt" class="btn btn-primary prompt-primary-action" onclick="optimizePromptWithModel()">让 AI 分析所选证据</button>
+                </div>
+              </section>
+
+              <section class="prompt-section" id="prompt-section-generation">
+                <div class="prompt-section-head"><div><h4><span class="prompt-section-index">02</span>AI 诊断与结构化规则</h4><p class="prompt-section-note">流式不兼容时会自动切换普通模式；原始输出仅用于诊断。</p></div></div>
+                <div id="prompt-job-progress" class="prompt-progress-panel" style="display:none;">
+                  <div class="prompt-rule-head"><strong id="prompt-job-phase">等待启动</strong><span id="prompt-job-percent">0%</span></div>
+                  <div class="prompt-progress-track"><div id="prompt-job-progress-bar" class="prompt-progress-bar"></div></div>
+                  <div id="prompt-generation-mode" class="prompt-section-note" style="margin-top:8px;"></div>
+                  <details class="prompt-json-details"><summary>开发诊断：查看模型原始响应</summary><pre id="prompt-stream-output" class="prompt-stream-console"></pre></details>
+                  <button class="btn btn-xs btn-danger" id="btn-cancel-prompt-job" style="margin-top:10px;" onclick="cancelCurrentAdminJob()">取消后台任务</button>
+                </div>
+                <div id="prompt-rule-review" class="prompt-review-panel" style="display:none;">
+                  <div class="prompt-rule-head"><div><strong>逐条审核候选规则</strong><div class="prompt-section-note">每条规则都可以取消勾选、编辑或删除。</div></div><button class="btn btn-sm btn-primary" onclick="finalizePromptRules()">保存选中规则并生成下一版</button></div>
+                  <div id="prompt-rule-list" style="margin-top:10px;"></div>
+                </div>
+                <div id="prompt-change-set" class="prompt-change-panel" style="display:none;"></div>
+              </section>
+
+              <section class="prompt-section" id="prompt-section-editor">
+                <div class="prompt-section-head"><div><h4><span class="prompt-section-index">03</span>候选版本与人工编辑</h4><p class="prompt-section-note">编辑只保存为候选，不会直接影响客户请求。</p></div></div>
+                <details class="prompt-json-details"><summary>展开完整提示词编辑器</summary>
+                  <textarea id="prompt-editor" class="form-control font-mono" rows="20" style="margin-top:10px;font-size:.76rem;line-height:1.5;"></textarea>
+                </details>
+                <details class="prompt-json-details"><summary>查看相对生产版本的文本差异</summary><pre id="prompt-diff-view" class="prompt-stream-console"></pre></details>
+                <input type="hidden" id="prompt-selected-id">
+                <div class="prompt-action-row">
+                  <button class="btn btn-secondary" onclick="savePromptCandidate()">手工保存为候选</button>
+                  <button class="btn btn-secondary" onclick="quickEvaluateSelectedPrompt()">快速回归失败案例</button>
+                  <button class="btn btn-primary" onclick="evaluateSelectedPrompt()">运行完整 A/B 回归</button>
+                  <button class="btn btn-success" onclick="activateSelectedPrompt()">启用已通过版本</button>
+                </div>
+              </section>
+
+              <section class="prompt-section" id="prompt-section-result">
+                <div class="prompt-section-head"><div><h4><span class="prompt-section-index">04</span>回归结果与发布门禁</h4><p class="prompt-section-note">优先查看新增退化和持续错误；保持正确字段默认隐藏。</p></div></div>
+                <div id="prompt-ab-result" class="prompt-result-panel" style="display:none;"></div>
+                <div id="prompt-result-empty" class="prompt-section-note" style="padding:18px 0;">尚未运行当前候选的完整 A/B 回归。</div>
+              </section>
+            </main>
+
+            <aside class="prompt-sidebar">
+              <div class="prompt-side-card">
+                <h5>本轮概览</h5>
+                <div class="prompt-metric-grid">
+                  <div class="prompt-metric"><span>已选证据</span><strong id="prompt-overview-evidence">0</strong></div>
+                  <div class="prompt-metric"><span>涉及字段</span><strong id="prompt-overview-fields">0</strong></div>
+                  <div class="prompt-metric"><span>失败案例</span><strong id="prompt-overview-failures">—</strong></div>
+                  <div class="prompt-metric"><span>候选准确率</span><strong id="prompt-overview-accuracy">—</strong></div>
+                </div>
+                <div id="prompt-overview-field-list" class="prompt-section-note" style="margin-top:10px;">尚未选择证据</div>
+              </div>
+              <div class="prompt-side-card">
+                <h5>发布门禁</h5>
+                <div id="prompt-sidebar-gates" class="prompt-gate-list">
+                  <div class="prompt-gate-item">等待完整 A/B 回归</div>
+                </div>
+              </div>
+              <div class="prompt-side-card">
+                <h5>安全规则</h5>
+                <div class="prompt-section-note" style="line-height:1.7;">AI 只提出候选规则，不会自动发布。快速回归只检查上一轮失败案例，最终发布仍需完整金标门禁通过。</div>
+              </div>
+            </aside>
+          </div>
+
+          <section class="prompt-history-card">
+            <div class="prompt-history-head"><h4>版本链与历史</h4><p>查看 V1、V2、V3 的父子关系、状态与优化目标。</p></div>
+            <div class="table-responsive">
+              <table class="data-table" id="table-prompt-versions">
+                <thead><tr><th>版本</th><th>来源</th><th>状态</th><th>优化目标</th><th>创建时间</th><th>操作</th></tr></thead>
+                <tbody><tr><td colspan="6" class="text-center text-muted py-6">正在加载提示词版本...</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
       </section>
+      <div id="admin-job-drawer" class="admin-job-drawer-collapsed" style="position:fixed;right:18px;bottom:18px;width:360px;max-height:45vh;overflow:auto;z-index:50;background:#151217;border:1px solid var(--border-color);border-radius:12px;padding:12px;display:none;box-shadow:0 12px 35px rgba(0,0,0,.45);">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;"><strong>后台任务</strong><div style="display:flex;gap:6px;"><button id="btn-toggle-admin-jobs" class="btn btn-xs btn-secondary" onclick="toggleAdminJobDrawer()">展开</button><button class="btn btn-xs btn-secondary" onclick="loadActiveAdminJobs()">刷新</button></div></div>
+        <div id="admin-job-list" style="margin-top:8px;"></div>
+      </div>
     </main>
   </div>
 
@@ -1093,6 +1253,17 @@ FREIGHT TERM: PREPAID`;
               <input type="text" id="fd-review-comment" class="form-control" placeholder="请输入审核批注或驳回说明" style="font-size:0.84rem;">
             </div>
           </div>
+          <div style="margin-bottom:12px;">
+            <label style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:6px;display:block;">单证类型（用于选择相似 Few-Shot）</label>
+            <select id="fd-document-type" class="form-control">
+              <option value="GENERAL">通用/暂不确定</option>
+              <option value="BILL_OF_LADING">提单</option>
+              <option value="BOOKING_CONFIRMATION">订舱确认书</option>
+              <option value="SHIPPING_INSTRUCTION">补料/托书</option>
+              <option value="COMMERCIAL_INVOICE">商业发票</option>
+              <option value="PACKING_LIST">装箱单</option>
+            </select>
+          </div>
           <div style="display:flex; flex-wrap:wrap; gap:14px 18px; align-items:center; font-size:0.82rem; color:var(--text-secondary);">
             <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer;">
               <input type="checkbox" id="fd-auto-refund" checked style="width:15px; height:15px;">
@@ -1100,7 +1271,7 @@ FREIGHT TERM: PREPAID`;
             </label>
             <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer;">
               <input type="checkbox" id="fd-create-fewshot" checked style="width:15px; height:15px;">
-              <span>自动将该用例生成 Few-Shot 少样本</span>
+              <span>生成 Few-Shot 候选（不会立即生效）</span>
             </label>
           </div>
         </div>
@@ -1122,6 +1293,57 @@ FREIGHT TERM: PREPAID`;
   </div>
 
   <!-- Modal: Add / Edit Few-Shot Example -->
+  <div class="modal" id="modal-benchmark-detail" role="dialog" aria-modal="true">
+    <div class="modal-dialog modal-xl">
+      <div class="modal-header"><h3>金标案例详情与逐字段对比</h3><button class="modal-close" data-close="modal-benchmark-detail">&times;</button></div>
+      <div class="modal-body" style="max-height:75vh;overflow:auto;">
+        <input type="hidden" id="bm-id">
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:12px;">
+          <div><label>案例名称</label><input id="bm-title" class="form-control"></div>
+          <div><label>单证类型</label><input id="bm-doc-type" class="form-control"></div>
+          <div><label>权重</label><input id="bm-weight" type="number" min="1" max="100" class="form-control"></div>
+          <div><label>数据用途</label><select id="bm-dataset-role" class="form-control"><option value="TRAIN">优化集</option><option value="HOLDOUT">保密测试集</option></select></div>
+        </div>
+        <div id="bm-role-note" class="prompt-section-note" style="margin-top:9px;"></div>
+        <div style="margin-top:12px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;"><label><input id="bm-active" type="checkbox"> 启用该金标案例</label><span id="bm-verification-status" class="badge badge-secondary">待人工确认</span><span id="bm-verified-meta" class="text-muted" style="font-size:.78rem;"></span></div>
+        <div style="margin-top:12px;"><label>原始文件</label><div id="bm-files" style="color:#38bdf8;"></div></div>
+        <div style="margin-top:12px;"><label>输入文本摘要</label><pre id="bm-input-text" style="white-space:pre-wrap;max-height:160px;overflow:auto;"></pre></div>
+        <div style="margin-top:12px;"><label>人工标准答案 JSON</label><textarea id="bm-ground-truth" class="form-control font-mono" rows="15"></textarea></div>
+        <div style="margin-top:16px;"><h4>最近一次回归逐字段结果</h4><div id="bm-latest-summary"></div><div class="table-responsive"><table class="data-table" id="table-bm-diffs"><thead><tr><th>字段</th><th>标准答案</th><th>实际结果</th><th>判定</th></tr></thead><tbody></tbody></table></div></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-secondary" data-close="modal-benchmark-detail">关闭</button><button class="btn btn-secondary" id="btn-run-single-benchmark" onclick="runSingleBenchmark()">单案例回归</button><button class="btn btn-secondary" onclick="saveBenchmark()">仅保存草稿</button><button class="btn btn-primary" id="btn-verify-benchmark" onclick="verifyBenchmark()">确认标准答案并启用</button></div>
+    </div>
+  </div>
+
+  <!-- Prompt refinement directions -->
+  <div class="modal" id="modal-prompt-refinement" style="z-index:10040;">
+    <div class="modal-dialog modal-lg" style="max-width:720px;">
+      <div class="modal-header">
+        <div><h3 id="prompt-refinement-title" style="margin:0;">继续优化当前版本</h3><p id="prompt-refinement-subtitle" style="margin:5px 0 0;color:var(--text-secondary);font-size:.78rem;"></p></div>
+        <button type="button" class="modal-close" onclick="closeModal('modal-prompt-refinement')">&times;</button>
+      </div>
+      <div class="modal-body" style="padding:20px 24px;">
+        <input type="hidden" id="prompt-refinement-mode" value="FAILED_RECOVERY">
+        <label style="display:block;margin-bottom:9px;">优化方向（可多选）</label>
+        <div class="prompt-direction-grid">
+          <label class="prompt-direction-option"><input type="checkbox" name="prompt-refinement-direction" value="FIX_REMAINING_NON_CRITICAL"><span><strong>修复剩余非关键字段</strong><small>继续提高尚未完全正确的普通字段</small></span></label>
+          <label class="prompt-direction-option"><input type="checkbox" name="prompt-refinement-direction" value="USE_NEW_FEEDBACK"><span><strong>使用新的人工反馈</strong><small>使用工作台中当前勾选的已审核反馈</small></span></label>
+          <label class="prompt-direction-option"><input type="checkbox" name="prompt-refinement-direction" value="SIMPLIFY_MERGE_RULES"><span><strong>简化和合并重复规则</strong><small>减少重复、冲突和难维护的表达</small></span></label>
+          <label class="prompt-direction-option"><input type="checkbox" name="prompt-refinement-direction" value="REDUCE_GUESSING"><span><strong>降低猜测与幻觉</strong><small>强化无证据留空和来源约束</small></span></label>
+          <label class="prompt-direction-option"><input type="checkbox" name="prompt-refinement-direction" value="CUSTOM"><span><strong>自定义目标</strong><small>结合下方人工补充指示执行</small></span></label>
+        </div>
+        <label style="display:block;margin:18px 0 8px;">人工补充优化方向和指示</label>
+        <textarea id="prompt-refinement-instruction" class="form-control" rows="5" maxlength="4000" placeholder="例如：优先修复 ContainerInfo，不要改变港口字段；合并重复规则时保留原有字段定义和空值原则。"></textarea>
+        <div id="prompt-refinement-feedback-note" class="prompt-section-note" style="margin-top:9px;"></div>
+        <div class="prompt-gate-item" style="margin-top:14px;">本次操作只创建新的子版本，不会修改当前已通过或生产中的版本；新版本仍需重新运行完整 A/B 回归。</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" onclick="closeModal('modal-prompt-refinement')">取消</button>
+        <button type="button" class="btn btn-primary" onclick="submitPromptRefinement()">开始生成下一版</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal" id="modal-few-shot-edit" role="dialog" aria-modal="true">
     <div class="modal-dialog modal-lg" style="max-width: 680px;">
       <div class="modal-header">

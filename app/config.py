@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     LLM_TEMPERATURE: float = Field(default=0.0, ge=0.0, le=2.0)
     LLM_TIMEOUT_SECONDS: int = Field(default=60, ge=5, le=600)
     LLM_MAX_RETRIES: int = Field(default=2, ge=0, le=10)
+    PROMPT_LLM_STREAM_TIMEOUT_SECONDS: int = Field(default=45, ge=10, le=300)
+    PROMPT_LLM_FALLBACK_TIMEOUT_SECONDS: int = Field(default=180, ge=30, le=600)
 
     # Multimodal Vision Model Settings (Shares LLM_BASE_URL & LLM_API_KEY)
     VISION_LLM_ENABLED: bool = True

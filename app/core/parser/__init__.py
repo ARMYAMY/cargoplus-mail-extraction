@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 import re
-from typing import List
+from typing import Any, Callable, Dict, List, Optional
 from app.schemas.task import AttachmentInput, SkillV3InputPayload
 from app.core.parser.eml_parser import parse_eml
 from app.core.parser.pdf_parser import parse_pdf
@@ -59,6 +59,7 @@ def compress_text_content(text: str, max_chars: int = 8000) -> str:
 def parse_single_file(
     file_path: Path,
     vision_budget: VisionBudget | None = None,
+    stage_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None,
 ) -> AttachmentInput:
     """Parses an individual file and returns an AttachmentInput structure."""
     ext = file_path.suffix.lower()
@@ -71,7 +72,7 @@ def parse_single_file(
     try:
         if ext == ".pdf":
             content_type = "application/pdf"
-            text, tables, ocr_text = parse_pdf(file_path, vision_budget)
+            text, tables, ocr_text = parse_pdf(file_path, vision_budget, stage_callback)
         elif ext == ".xlsx":
             content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             text, tables, ocr_text = parse_excel(file_path)
@@ -83,6 +84,8 @@ def parse_single_file(
             text, tables, ocr_text = parse_doc(file_path, vision_budget)
         elif ext in IMAGE_EXTENSIONS:
             content_type = f"image/{ext.lstrip('.')}"
+            if stage_callback:
+                stage_callback("VISION_OCR", {"filename": filename, "page": 1, "image": 1})
             ocr_text = extract_ocr_from_image(file_path, vision_budget)
         elif ext in {".txt", ".csv", ".json", ".md"}:
             content_type = "text/plain"
@@ -115,6 +118,7 @@ def process_uploaded_files(
     body: str = "",
     temp_dir: Path = None,
     vision_budget: VisionBudget | None = None,
+    stage_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None,
 ) -> SkillV3InputPayload:
     """
     Processes uploaded files (which might include an .eml email file and/or various attachments),
@@ -141,9 +145,9 @@ def process_uploaded_files(
 
             # Parse each extracted attachment
             for att_p in extracted_att_paths:
-                attachments.append(parse_single_file(att_p, vision_budget))
+                attachments.append(parse_single_file(att_p, vision_budget, stage_callback))
         else:
-            attachments.append(parse_single_file(file_path, vision_budget))
+            attachments.append(parse_single_file(file_path, vision_budget, stage_callback))
 
     return SkillV3InputPayload(
         mail_subject=final_subject,

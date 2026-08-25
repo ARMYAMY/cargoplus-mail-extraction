@@ -142,6 +142,7 @@ document.addEventListener('DOMContentLoaded', () => {
         loadAdminFeedbacks();
         loadAdminFewShots();
         loadAdminVersions();
+        loadActiveAdminJobs();
       }
     });
   });
@@ -160,6 +161,10 @@ document.addEventListener('DOMContentLoaded', () => {
       loadAdminFeedbacks();
       loadAdminFewShots();
       loadAdminVersions();
+      loadBenchmarks();
+      loadPromptVersions();
+      loadPromptFeedbackOptions();
+      loadActiveAdminJobs();
     }
   });
 
@@ -2847,13 +2852,17 @@ MEAS: 68.000 CBM`;
     const btnAudit = document.getElementById('btn-subtab-fb-audit');
     const btnFewShot = document.getElementById('btn-subtab-fb-fewshot');
     const btnRelease = document.getElementById('btn-subtab-fb-release');
+    const btnPrompt = document.getElementById('btn-subtab-fb-prompt');
+    const btnBenchmark = document.getElementById('btn-subtab-fb-benchmark');
 
     const viewAudit = document.getElementById('subview-fb-audit');
     const viewFewShot = document.getElementById('subview-fb-fewshot');
     const viewRelease = document.getElementById('subview-fb-release');
+    const viewPrompt = document.getElementById('subview-fb-prompt');
+    const viewBenchmark = document.getElementById('subview-fb-benchmark');
 
-    [btnAudit, btnFewShot, btnRelease].forEach(b => b && b.classList.remove('active'));
-    [viewAudit, viewFewShot, viewRelease].forEach(v => v && (v.style.display = 'none'));
+    [btnAudit, btnFewShot, btnRelease, btnPrompt, btnBenchmark].forEach(b => b && b.classList.remove('active'));
+    [viewAudit, viewFewShot, viewRelease, viewPrompt, viewBenchmark].forEach(v => v && (v.style.display = 'none'));
 
     if (subName === 'fewshot') {
       if (btnFewShot) btnFewShot.classList.add('active');
@@ -2863,11 +2872,610 @@ MEAS: 68.000 CBM`;
       if (btnRelease) btnRelease.classList.add('active');
       if (viewRelease) viewRelease.style.display = 'block';
       loadAdminVersions();
+    } else if (subName === 'prompt') {
+      if (btnPrompt) btnPrompt.classList.add('active');
+      if (viewPrompt) viewPrompt.style.display = 'block';
+      loadPromptVersions();
+      loadPromptFeedbackOptions();
+      loadActiveAdminJobs();
+    } else if (subName === 'benchmark') {
+      if (btnBenchmark) btnBenchmark.classList.add('active');
+      if (viewBenchmark) viewBenchmark.style.display = 'block';
+      loadBenchmarks();
     } else {
       if (btnAudit) btnAudit.classList.add('active');
       if (viewAudit) viewAudit.style.display = 'block';
       loadAdminFeedbacks();
     }
+  };
+
+  let benchmarkCases = [];
+
+  window.renderBenchmarkRows = function() {
+    const tbody = document.querySelector('#table-benchmarks tbody');
+    const role = document.getElementById('benchmark-role-filter')?.value || '';
+    const rows = benchmarkCases.filter(item => !role || (item.dataset_role || 'TRAIN') === role);
+    tbody.innerHTML = rows.length ? rows.map(item => {
+      const latest = item.latest_result || {}, isHoldout=(item.dataset_role||'TRAIN')==='HOLDOUT';
+      return `<tr>
+        <td><strong>${escapeHtml(item.title)}</strong><div class="font-mono text-muted" style="font-size:.7rem;">${escapeHtml(item.id)}</div></td>
+        <td>${isHoldout?'<span class="badge badge-warning">🔒 保密测试集</span>':'<span class="badge badge-info">优化集</span>'}</td>
+        <td><span class="badge badge-info">${escapeHtml(item.doc_type)}</span></td>
+        <td>${escapeHtml((item.source_files || []).join(', ') || '仅文本')}</td>
+        <td>${item.weight}</td><td>${item.verification_status !== 'VERIFIED' ? '<span class="badge badge-warning">待人工确认</span>' : (item.is_active ? '<span class="badge badge-success">已确认·启用</span>' : '<span class="badge badge-secondary">已确认·停用</span>')}</td>
+        <td>${latest.accuracy_percent == null ? '-' : `${latest.accuracy_percent}%`}</td>
+        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${isHoldout?'🔒 保密明细不用于 AI 优化':escapeHtml(latest.error || (latest.diff_keys || []).join(', ') || '-')}</td>
+        <td><button class="btn btn-xs btn-secondary" onclick="openBenchmarkDetail('${item.id}')">查看/编辑</button></td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="9" class="text-center text-muted py-8">当前筛选下暂无金标案例</td></tr>';
+  };
+
+  window.loadBenchmarks = async function() {
+    const tbody = document.querySelector('#table-benchmarks tbody');
+    try {
+      const res = await adminFetch('/admin/benchmarks');
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
+      benchmarkCases = body.data || [];
+      document.getElementById('benchmark-train-count').textContent=body.meta?.training_count??benchmarkCases.filter(item=>(item.dataset_role||'TRAIN')==='TRAIN').length;
+      document.getElementById('benchmark-holdout-count').textContent=body.meta?.holdout_count??benchmarkCases.filter(item=>item.dataset_role==='HOLDOUT').length;
+      renderBenchmarkRows();
+    } catch (err) { tbody.innerHTML = `<tr><td colspan="9" class="text-center text-danger py-8">${escapeHtml(err.message)}</td></tr>`; }
+  };
+
+  function updateBenchmarkRoleNote() {
+    const isHoldout=document.getElementById('bm-dataset-role').value==='HOLDOUT';
+    document.getElementById('bm-role-note').textContent=isHoldout?'🔒 保密测试集不能单案例试题、不能导出标准答案，也不会进入 AI 失败证据；只参加完整发布门禁。':'优化集可用于 AI 诊断、快速回归和基于失败继续优化。';
+    const item=benchmarkCases.find(row=>row.id===document.getElementById('bm-id').value);
+    document.getElementById('btn-run-single-benchmark').disabled=isHoldout||item?.verification_status!=='VERIFIED'||!item?.is_active;
+  }
+
+  window.openBenchmarkDetail = function(id) {
+    const item = benchmarkCases.find(row => row.id === id);
+    if (!item) return;
+    document.getElementById('bm-id').value = item.id;
+    document.getElementById('bm-title').value = item.title || '';
+    document.getElementById('bm-doc-type').value = item.doc_type || 'GENERAL';
+    document.getElementById('bm-weight').value = item.weight || 1;
+    document.getElementById('bm-dataset-role').value = item.dataset_role || 'TRAIN';
+    document.getElementById('bm-active').checked = Boolean(item.is_active);
+    document.getElementById('bm-active').disabled = item.verification_status !== 'VERIFIED';
+    const status = document.getElementById('bm-verification-status');
+    status.className = `badge ${item.verification_status === 'VERIFIED' ? 'badge-success' : 'badge-warning'}`;
+    status.textContent = item.verification_status === 'VERIFIED' ? '已人工确认' : '待人工确认';
+    document.getElementById('bm-verified-meta').textContent = item.verified_at ? `确认人：${item.verified_by || 'admin'} · ${new Date(item.verified_at).toLocaleString()}` : '不会进入金标导出与回归';
+    document.getElementById('btn-run-single-benchmark').disabled = item.verification_status !== 'VERIFIED' || !item.is_active || item.dataset_role === 'HOLDOUT';
+    document.getElementById('btn-verify-benchmark').style.display = item.verification_status === 'VERIFIED' ? 'none' : '';
+    document.getElementById('bm-input-text').textContent = item.input_text || '无文本摘要';
+    document.getElementById('bm-ground-truth').value = JSON.stringify(item.ground_truth || {}, null, 2);
+    const files = document.getElementById('bm-files'); files.replaceChildren();
+    (item.source_files || []).forEach(name => {
+      const button = document.createElement('button'); button.className='btn btn-xs btn-secondary'; button.textContent=name;
+      button.onclick=() => downloadBenchmarkFile(item.id, name); files.appendChild(button);
+    });
+    const latest = item.latest_result || {};
+    document.getElementById('bm-latest-summary').textContent = latest.run_id ? `运行 ${latest.run_id} · 准确率 ${latest.accuracy_percent}%${latest.error ? ` · ${latest.error}` : ''}` : '尚未运行回归';
+    const tbody = document.querySelector('#table-bm-diffs tbody');
+    tbody.innerHTML = (latest.field_diffs || []).map(diff => `<tr style="${diff.is_match ? '' : 'background:rgba(239,68,68,.12);'}"><td class="font-mono">${escapeHtml(diff.field)}</td><td><pre style="white-space:pre-wrap;">${escapeHtml(JSON.stringify(diff.expected))}</pre></td><td><pre style="white-space:pre-wrap;">${escapeHtml(JSON.stringify(diff.actual))}</pre></td><td>${diff.is_match ? '<span class="badge badge-success">正确</span>' : `<span class="badge badge-danger">错误${diff.is_critical ? '·关键' : ''}</span>`}</td></tr>`).join('') || '<tr><td colspan="4" class="text-muted">暂无逐字段结果，请运行一次回归。</td></tr>';
+    document.getElementById('bm-dataset-role').onchange=updateBenchmarkRoleNote;
+    updateBenchmarkRoleNote();
+    openModal('modal-benchmark-detail');
+  };
+
+  window.saveBenchmark = async function() {
+    const id=document.getElementById('bm-id').value; let groundTruth;
+    try { groundTruth=JSON.parse(document.getElementById('bm-ground-truth').value); } catch(e) { return showToast('error', `标准答案JSON无效: ${e.message}`); }
+    const item=benchmarkCases.find(row=>row.id===id); const payload={title:document.getElementById('bm-title').value.trim(),doc_type:document.getElementById('bm-doc-type').value.trim(),dataset_role:document.getElementById('bm-dataset-role').value,weight:Number(document.getElementById('bm-weight').value),ground_truth:groundTruth};
+    if(item?.verification_status==='VERIFIED') payload.is_active=document.getElementById('bm-active').checked;
+    const res=await adminFetch(`/admin/benchmarks/${encodeURIComponent(id)}`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const body=await res.json(); if(!res.ok) return showToast('error', typeof body.detail==='string'?body.detail:JSON.stringify(body.detail));
+    showToast('success', body.message); closeModal('modal-benchmark-detail'); loadBenchmarks();
+  };
+
+  window.verifyBenchmark = async function() {
+    const id=document.getElementById('bm-id').value; let groundTruth;
+    try { groundTruth=JSON.parse(document.getElementById('bm-ground-truth').value); } catch(e) { return showToast('error', `标准答案JSON无效: ${e.message}`); }
+    if(!groundTruth || !Object.keys(groundTruth).length) return showToast('warning','标准答案不能为空');
+    const res=await adminFetch(`/admin/benchmarks/${encodeURIComponent(id)}`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:document.getElementById('bm-title').value.trim(),doc_type:document.getElementById('bm-doc-type').value.trim(),dataset_role:document.getElementById('bm-dataset-role').value,weight:Number(document.getElementById('bm-weight').value),ground_truth:groundTruth,verification_status:'VERIFIED'})});
+    const body=await res.json(); if(!res.ok) return showToast('error',typeof body.detail==='string'?body.detail:JSON.stringify(body.detail));
+    showToast('success','标准答案已人工确认并启用，可进入导出与回归'); await loadBenchmarks(); openBenchmarkDetail(id);
+  };
+
+  window.runSingleBenchmark = async function() {
+    const id=document.getElementById('bm-id').value;
+    try {
+      await startTrackedJob(`/admin/jobs/benchmark-evaluation/${encodeURIComponent(id)}`,async data=>{showToast(data.can_release?'success':'warning',`单案例准确率 ${data.overall_accuracy_percent}%`);await loadBenchmarks();openBenchmarkDetail(id);});
+      showToast('info','单案例回归已转入后台，可离开页面后再查看');
+    } catch(err) { showToast('error',`单案例回归启动失败：${err.message}`); }
+  };
+
+  window.downloadBenchmarkFile = async function(id,name) {
+    const res=await adminFetch(`/admin/benchmarks/${encodeURIComponent(id)}/files/${encodeURIComponent(name)}`); if(!res.ok) return showToast('error',`下载失败 HTTP ${res.status}`);
+    const blob=await res.blob(), url=URL.createObjectURL(blob), a=document.createElement('a'); a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);
+  };
+
+  let promptVersions = [];
+  let promptFeedbackOptions = [];
+  let promptFeedbackFilterCatalog = [];
+  let currentAdminJobId = localStorage.getItem('cargoCurrentAdminJob') || '';
+  let currentPromptJobType = 'PROMPT_GENERATION';
+  let currentPromptEvaluationJobId = localStorage.getItem('cargoPromptEvaluationJob') || '';
+  let lastSuccessfulBenchmarkJobId = localStorage.getItem('cargoReleaseBenchmarkJob') || '';
+  let currentPromptRules = [];
+  let adminJobsExpanded = localStorage.getItem('cargoAdminJobsExpanded') === '1';
+
+  function setPromptWorkflowStep(step) {
+    const order=['evidence','diagnosis','review','quick','full'];
+    const currentIndex=Math.max(0,order.indexOf(step));
+    document.querySelectorAll('#prompt-workflow-steps .prompt-step').forEach(el=>{
+      const index=order.indexOf(el.dataset.step);
+      el.classList.toggle('active',index===currentIndex);
+      el.classList.toggle('done',index<currentIndex);
+      const number=el.querySelector('.prompt-step-number');
+      if(number) number.textContent=index<currentIndex?'✓':String(index+1);
+    });
+  }
+
+  function promptPhaseLabel(phase) {
+    const labels={QUEUED:'等待后台执行',LOADING_EVIDENCE:'正在整理人工反馈',LOADING_FAILED_CASES:'正在整理失败案例',MODEL_STREAMING:'模型正在流式分析',COMPATIBILITY_RETRY:'流式正文为空，正在切换兼容模式',VALIDATING:'正在校验结构化结果',AWAITING_REVIEW:'等待人工审核',PREPARING:'准备回归数据',BASELINE_EVALUATION:'正在评测生产版本',CANDIDATE_EVALUATION:'正在评测候选版本',READING_GOLD_FILE:'读取金标文件',PDF_TO_IMAGE:'PDF转图片',VISION_OCR:'视觉OCR识别',PREPROCESS_CACHE_HIT:'复用已完成的PDF解析与OCR',MAIN_MODEL_REQUEST:'主模型请求',PARSING_MODEL_JSON:'解析模型JSON',FIELD_COMPARISON:'字段对比',GENERATING_REPORT:'生成评测报告',EVALUATING:'正在执行案例',COMPLETED:'任务完成',FAILED:'任务失败',CANCELLED:'任务已取消'};
+    return labels[phase]||phase||'处理中';
+  }
+
+  function jobStageSummary(job) {
+    const detail=job.result?.stage_detail||{};
+    const prefix=detail.evaluation_label?`${detail.evaluation_label} · `:'';
+    if(job.phase==='MAIN_MODEL_REQUEST') return `${prefix}主模型请求：第 ${detail.attempt||job.progress_current||1}/${detail.total_attempts||job.progress_total||1} 次`;
+    const location=detail.page?` · 第${detail.page}页`:'';
+    return `${prefix}${promptPhaseLabel(job.phase)}${location}`;
+  }
+
+  function renderEvaluationStageSteps(job) {
+    if(job.job_type!=='PROMPT_EVALUATION'||!['RUNNING','QUEUED'].includes(job.status)) return '';
+    const stages=['READING_GOLD_FILE','PDF_TO_IMAGE','VISION_OCR','MAIN_MODEL_REQUEST','PARSING_MODEL_JSON','FIELD_COMPARISON','GENERATING_REPORT'];
+    const current=job.phase==='PREPROCESS_CACHE_HIT'?'MAIN_MODEL_REQUEST':job.phase;
+    const activeIndex=stages.indexOf(current);
+    return `<div class="job-stage-list">${stages.map((stage,index)=>`<div class="job-stage-step ${index<activeIndex?'done':index===activeIndex?'active':''}"><span></span>${escapeHtml(promptPhaseLabel(stage))}${stage==='MAIN_MODEL_REQUEST'&&current===stage?` <b>${job.result?.stage_detail?.attempt||job.progress_current||1}/${job.result?.stage_detail?.total_attempts||job.progress_total||1}</b>`:''}</div>`).join('')}</div>`;
+  }
+
+  window.loadPromptFeedbackOptions = async function(query = '') {
+    const panel=document.getElementById('prompt-feedback-options');
+    try {
+      const res=await adminFetch(`/admin/prompts/feedback-options${query ? `?${query}` : ''}`); const body=await res.json();
+      if(!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
+      promptFeedbackOptions=body.data || [];
+      if (!query) promptFeedbackFilterCatalog = [...promptFeedbackOptions];
+      panel.innerHTML=promptFeedbackOptions.length ? promptFeedbackOptions.map(item=>{
+        const hasCategory=item.error_category && item.error_category!=='UNSPECIFIED';
+        const categoryLabel=hasCategory ? item.error_category : '未分类';
+        const fieldTags=(item.diff_fields||[]).map(field=>`<span class="badge badge-info" style="margin:0 4px 4px 0;">${escapeHtml(field)}</span>`).join('');
+        const diffRows=(item.field_diffs||[]).map(diff=>`<tr><td class="font-mono">${escapeHtml(diff.field)}</td><td><pre style="white-space:pre-wrap;margin:0;">${escapeHtml(JSON.stringify(diff.actual))}</pre></td><td><pre style="white-space:pre-wrap;margin:0;">${escapeHtml(JSON.stringify(diff.expected))}</pre></td></tr>`).join('');
+        return `<div class="prompt-feedback-card">
+          <div style="display:flex;gap:8px;align-items:flex-start;">
+            <input type="checkbox" class="prompt-feedback-checkbox" value="${item.id}" onchange="updatePromptFeedbackSummary()" style="margin-top:4px;">
+            <div style="flex:1;min-width:0;">
+              <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;"><strong>${escapeHtml(item.tenant_name)}</strong><span class="text-muted" style="font-size:.75rem;">${formatDate(item.created_at)}</span><span class="badge ${hasCategory?'badge-danger':'badge-info'}">${escapeHtml(categoryLabel)}</span></div>
+              <div style="margin-top:6px;">${fieldTags || '<span class="text-muted" style="font-size:.78rem;">无字段标记</span>'}</div>
+              ${item.review_comment ? `<div style="margin-top:6px;color:var(--text-secondary);font-size:.78rem;">审核意见：${escapeHtml(item.review_comment)}</div>` : ''}
+            </div>
+          </div>
+          ${diffRows ? `<details style="margin-top:8px;"><summary style="cursor:pointer;font-size:.78rem;color:var(--text-secondary);">展开字段级对比（系统原值 vs 客户改正值，共 ${item.field_diffs.length} 项）</summary><div class="table-responsive" style="margin-top:6px;"><table class="data-table"><thead><tr><th>字段</th><th>系统原值</th><th>客户改正值</th></tr></thead><tbody>${diffRows}</tbody></table></div></details>` : ''}
+        </div>`;
+      }).join('') : '<span class="text-muted">暂无已采纳反馈</span>';
+      updatePromptFeedbackSummary();
+      if (!query) populatePromptFeedbackFilters();
+    } catch(err) { panel.textContent=`加载失败: ${err.message}`; }
+  };
+
+  window.populatePromptFeedbackFilters = function() {
+    const fill=(id, values, label) => {
+      const el=document.getElementById(id); if(!el) return; const selected=el.value;
+      el.innerHTML=`<option value="">${label}</option>`+[...new Set(values.filter(Boolean))].sort().map(v=>`<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+      el.value=selected;
+    };
+    fill('prompt-filter-tenant', promptFeedbackFilterCatalog.map(x=>x.tenant_id), '全部租户');
+    fill('prompt-filter-doc-type', promptFeedbackFilterCatalog.map(x=>x.document_type), '全部单证类型');
+    fill('prompt-filter-error', promptFeedbackFilterCatalog.map(x=>x.error_category), '全部错误类型');
+  };
+
+  window.applyPromptFeedbackFilters = function() {
+    const params=new URLSearchParams();
+    const values={field:document.getElementById('prompt-filter-field').value.trim(),tenant_id:document.getElementById('prompt-filter-tenant').value,document_type:document.getElementById('prompt-filter-doc-type').value,error_category:document.getElementById('prompt-filter-error').value};
+    Object.entries(values).forEach(([k,v])=>v&&params.set(k,v)); loadPromptFeedbackOptions(params.toString());
+  };
+
+  window.selectAllFilteredFeedbacks = function() {
+    document.querySelectorAll('.prompt-feedback-checkbox').forEach(el=>el.checked=true); updatePromptFeedbackSummary();
+  };
+
+  window.selectSameFieldFeedbacks = function() {
+    let field=document.getElementById('prompt-filter-field').value.trim();
+    if(!field){ const selected=promptFeedbackOptions.filter(item=>document.querySelector(`.prompt-feedback-checkbox[value="${item.id}"]`)?.checked); field=selected[0]?.diff_fields?.[0] || ''; }
+    if(!field) return showToast('warning','请先输入字段名或选择一条反馈');
+    document.querySelectorAll('.prompt-feedback-checkbox').forEach(el=>{ const item=promptFeedbackOptions.find(x=>x.id===el.value); el.checked=Boolean(item&&(item.diff_fields||[]).includes(field)); });
+    document.getElementById('prompt-filter-field').value=field; updatePromptFeedbackSummary();
+  };
+
+  window.previewPromptEvidence = async function() {
+    const goal=document.getElementById('prompt-optimization-goal').value.trim();
+    const feedbackIds=Array.from(document.querySelectorAll('.prompt-feedback-checkbox:checked')).map(el=>el.value);
+    if(goal.length<5||!feedbackIds.length) { showToast('warning','请填写优化目标并选择反馈'); return false; }
+    const res=await adminFetch('/admin/prompts/evidence-preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({optimization_goal:goal,feedback_ids:feedbackIds})});
+    const body=await res.json(); if(!res.ok) { showToast('error',body.detail||'证据预览失败'); return false; }
+    const panel=document.getElementById('prompt-evidence-preview'); panel.style.display='block';
+    panel.innerHTML=`<strong>以下完整证据将发送给模型（不截断）</strong>${body.data.evidence.map(item=>`<div style="margin-top:10px;padding:8px;background:rgba(255,255,255,.03);border-radius:6px;"><div><span class="badge badge-info">${escapeHtml(item.document_type)}</span> ${escapeHtml(item.feedback_id)} · ${escapeHtml(item.tenant_id)}</div>${item.field_diffs.map(d=>`<div class="font-mono" style="margin-top:5px;">${escapeHtml(d.field)}：<span style="color:#f87171">${escapeHtml(JSON.stringify(d.actual))}</span> → <span style="color:#34d399">${escapeHtml(JSON.stringify(d.expected))}</span></div>`).join('')}<details style="margin-top:7px;"><summary>查看该反馈发送给模型的完整 JSON</summary><pre style="white-space:pre-wrap;max-height:260px;overflow:auto;">${escapeHtml(JSON.stringify(item,null,2))}</pre></details></div>`).join('')}`;
+    return true;
+  };
+
+  window.updatePromptFeedbackSummary = function() {
+    const ids=Array.from(document.querySelectorAll('.prompt-feedback-checkbox:checked')).map(el=>el.value);
+    const selected=promptFeedbackOptions.filter(item=>ids.includes(item.id)); const counts={};
+    selected.forEach(item=>(item.diff_fields||[]).forEach(field=>counts[field]=(counts[field]||0)+1));
+    document.getElementById('prompt-feedback-summary').textContent=`已选择 ${selected.length} 条反馈${selected.length ? `；高频字段：${Object.entries(counts).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k}(${v})`).join('、')}` : '。请明确选择本次优化依据。'}`;
+    const evidenceMetric=document.getElementById('prompt-overview-evidence'); if(evidenceMetric)evidenceMetric.textContent=selected.length;
+    const fieldMetric=document.getElementById('prompt-overview-fields'); if(fieldMetric)fieldMetric.textContent=Object.keys(counts).length;
+    const fieldList=document.getElementById('prompt-overview-field-list'); if(fieldList)fieldList.textContent=selected.length?`字段：${Object.entries(counts).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k} × ${v}`).join('、')}`:'尚未选择证据';
+  };
+
+  window.loadPromptVersions = async function() {
+    const tbody = document.querySelector('#table-prompt-versions tbody');
+    try {
+      const res = await adminFetch('/admin/prompts');
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
+      promptVersions = body.data || [];
+      if (!promptVersions.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-6">暂无提示词版本</td></tr>';
+        return;
+      }
+      tbody.innerHTML = promptVersions.map(item => `
+        <tr>
+          <td class="font-mono"><strong>V${item.iteration_number||1}</strong> · ${escapeHtml(item.version_tag)}${item.parent_id?`<div class="text-muted" style="font-size:.7rem;">父版本 ${escapeHtml(item.parent_id)}</div>`:''}</td>
+          <td>${escapeHtml(item.source)}</td>
+          <td><span class="badge ${item.status === 'ACTIVE' ? 'badge-success' : (item.status === 'FAILED' ? 'badge-danger' : 'badge-info')}">${escapeHtml(item.status)}</span></td>
+          <td style="max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(item.optimization_goal || '-')}</td>
+          <td>${formatDate(item.created_at)}</td>
+          <td><button class="btn btn-xs btn-secondary" onclick="selectPromptVersion('${item.id}')">查看/选择</button></td>
+        </tr>`).join('');
+      const active = promptVersions.find(item => item.status === 'ACTIVE') || promptVersions[0];
+      const productionLabel=document.getElementById('prompt-current-production');if(productionLabel)productionLabel.textContent=active?`V${active.iteration_number||1}`:'—';
+      if (!document.getElementById('prompt-selected-id').value && active) selectPromptVersion(active.id);
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan="6" class="text-center text-danger py-6">${escapeHtml(err.message)}</td></tr>`;
+    }
+  };
+
+  window.selectPromptVersion = function(id) {
+    const item = promptVersions.find(row => row.id === id);
+    if (!item) return;
+    document.getElementById('prompt-selected-id').value = item.id;
+    document.getElementById('prompt-editor').value = item.content || '';
+    document.getElementById('prompt-optimization-goal').value = item.source === 'BUILTIN' ? '' : (item.optimization_goal || '');
+    const selectedLabel=document.getElementById('prompt-current-selection');if(selectedLabel)selectedLabel.textContent=`V${item.iteration_number||1}`;
+    const selectedStatus=document.getElementById('prompt-current-status');if(selectedStatus)selectedStatus.textContent=item.status||'—';
+    const active = promptVersions.find(row => row.status === 'ACTIVE');
+    const diffView = document.getElementById('prompt-diff-view');
+    diffView.innerHTML = '';
+    if (item.id === active?.id) {
+      diffView.textContent = '当前选择的是生产版本。';
+      return;
+    }
+    const oldLines = new Set((active?.content || '').split('\n'));
+    const newLines = new Set((item.content || '').split('\n'));
+    const removed = [...oldLines].filter(line => line.trim() && !newLines.has(line));
+    const added = [...newLines].filter(line => line.trim() && !oldLines.has(line));
+    if (!removed.length && !added.length) {
+      diffView.textContent = '未检测到逐行差异';
+      return;
+    }
+    // 逐行 DOM 渲染带颜色的 diff：删除行红色（- 前缀）、新增行绿色（+ 前缀）。
+    // 使用 textContent 赋值，等价于 escapeHtml，杜绝注入。
+    removed.forEach(line => {
+      const row = document.createElement('div');
+      row.style.color = '#f87171';
+      row.textContent = `- ${line}`;
+      diffView.appendChild(row);
+    });
+    added.forEach(line => {
+      const row = document.createElement('div');
+      row.style.color = '#34d399';
+      row.textContent = `+ ${line}`;
+      diffView.appendChild(row);
+    });
+    const wrapper = diffView.closest('details');
+    if (wrapper) wrapper.open = true;
+    diffView.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+  };
+
+  window.savePromptCandidate = async function() {
+    const content = document.getElementById('prompt-editor').value;
+    const optimizationGoal = document.getElementById('prompt-optimization-goal').value.trim();
+    try {
+      const res = await adminFetch('/admin/prompts', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({content, optimization_goal: optimizationGoal}),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail));
+      showToast('success', body.message);
+      document.getElementById('prompt-selected-id').value = body.data.id;
+      await loadPromptVersions();
+      selectPromptVersion(body.data.id);
+    } catch (err) { showToast('error', `保存候选失败: ${err.message}`); }
+  };
+
+  window.optimizePromptWithModel = async function() {
+    const goal = document.getElementById('prompt-optimization-goal').value.trim();
+    if (goal.length < 5) return showToast('warning', '请先填写明确的优化目标');
+    const feedbackIds=Array.from(document.querySelectorAll('.prompt-feedback-checkbox:checked')).map(el=>el.value);
+    if (!feedbackIds.length) return showToast('warning', '请至少选择一条已审核反馈作为优化依据');
+    const button = document.getElementById('btn-optimize-prompt');
+    const originalText = button?.textContent || '让模型生成候选提示词';
+    if (button) {
+      button.disabled = true;
+      button.textContent = '模型分析中（最长约 130 秒）…';
+    }
+    try {
+      if (!await previewPromptEvidence()) throw new Error('证据预览未通过，未启动模型任务');
+      const res = await adminFetch('/admin/prompts/optimization-jobs', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({optimization_goal:goal, feedback_ids:feedbackIds}),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail));
+      currentAdminJobId=body.data.id; localStorage.setItem('cargoCurrentAdminJob',currentAdminJobId);
+      setPromptWorkflowStep('diagnosis');
+      showToast('info', body.message); monitorPromptGenerationJob(currentAdminJobId);
+    } catch (err) {
+      showToast('error', `模型优化失败: ${err.message}`);
+      if (button) {
+        button.disabled = false;
+        button.textContent = originalText;
+      }
+    }
+  };
+
+  function jobErrorText(job) {
+    const labels={CONNECTION_FAILED:'模型连接失败',UPSTREAM_HTTP_ERROR:'模型服务 HTTP 错误',TIMEOUT:'模型响应超时',EMPTY_RESPONSE:'模型接口未返回正文',FORMAT_ERROR:'模型正文不是有效结构化结果',VALIDATION_FAILED:'规则校验失败',CANCELLED:'任务已取消',INTERRUPTED:'服务重载中断',INTERNAL_ERROR:'后台执行失败'};
+    return `${labels[job.error_code]||job.error_code||'任务失败'}：${job.error_message||'未知错误'}`;
+  }
+
+  async function consumeJobStream(jobId, onUpdate) {
+    const res=await adminFetch(`/admin/jobs/${encodeURIComponent(jobId)}/stream`);
+    if(!res.ok) throw new Error(`读取任务进度失败 HTTP ${res.status}`);
+    const reader=res.body.getReader(), decoder=new TextDecoder(); let buffer='';
+    while(true){ const {value,done}=await reader.read(); buffer+=decoder.decode(value||new Uint8Array(),{stream:!done}); const lines=buffer.split('\n'); buffer=lines.pop()||'';
+      for(const line of lines){ if(!line.trim()) continue; const event=JSON.parse(line); if(event.data) await onUpdate(event.data); }
+      if(done) break;
+    }
+  }
+
+  window.monitorPromptGenerationJob = async function(jobId) {
+    currentAdminJobId=jobId; localStorage.setItem('cargoCurrentAdminJob',jobId);
+    const panel=document.getElementById('prompt-job-progress'); panel.style.display='block';
+    const button=document.getElementById('btn-optimize-prompt'); if(button){button.disabled=true;button.textContent='模型流式生成中…';}
+    try {
+      await consumeJobStream(jobId, async job=>{
+        currentPromptJobType=job.job_type;
+        setPromptWorkflowStep(job.status==='COMPLETED'?'review':'diagnosis');
+        document.getElementById('prompt-job-phase').textContent=promptPhaseLabel(job.phase);
+        document.getElementById('prompt-job-percent').textContent=job.phase==='MODEL_STREAMING' ? `已接收 ${job.progress_current||0} 字符` : `${job.progress_percent||0}%`;
+        document.getElementById('prompt-job-progress-bar').style.width=`${job.progress_percent||0}%`;
+        document.getElementById('prompt-stream-output').textContent=job.stream_text||'';
+        const diagnostics=job.result?.generation_diagnostics||{}, mode=document.getElementById('prompt-generation-mode');
+        if(mode){
+          if(job.phase==='COMPATIBILITY_RETRY') mode.textContent='当前模型的流式响应没有正文，系统正在自动使用普通模式重试，无需重新点击。';
+          else if(diagnostics.fallback_used) mode.textContent=`已通过兼容模式取得 ${diagnostics.fallback_content_chars||0} 个字符。`;
+          else if(job.phase==='MODEL_STREAMING') mode.textContent='正在实时接收模型正文。';
+          else mode.textContent='';
+        }
+        if(job.status==='COMPLETED') renderPromptRules(job.result?.rules||[],job.result?.diagnoses||[]);
+        if(job.status==='FAILED'||job.status==='CANCELLED') showToast('error',jobErrorText(job));
+      });
+    } catch(err){ showToast('error',`任务进度连接失败：${err.message}`); }
+    finally { if(button){button.disabled=false;button.textContent='让模型生成候选提示词';} loadActiveAdminJobs(); }
+  };
+
+  window.renderPromptRules = function(rules, diagnoses=[]) {
+    setPromptWorkflowStep('review');
+    currentPromptRules=rules.map(rule=>({...rule}));
+    const panel=document.getElementById('prompt-rule-review'); panel.style.display='block';
+    const diagnosisHtml=diagnoses.length?`<div class="prompt-diagnosis-grid"><strong>AI 错误诊断（${diagnoses.length} 条）</strong>${diagnoses.map(item=>`<div class="prompt-diagnosis-item"><div class="prompt-rule-meta"><strong>${escapeHtml(item.field||'-')}</strong><span class="badge ${item.classification==='REGRESSED'?'badge-danger':'badge-info'}">${escapeHtml(item.classification==='REGRESSED'?'新增退化':'持续错误')}</span><span class="badge badge-info">${escapeHtml(item.error_type||'UNKNOWN')}</span></div><div style="margin-top:6px;">${escapeHtml(item.reason||'')}</div><small class="text-muted">来源案例：${escapeHtml((item.source_case_ids||[]).join(', '))}</small></div>`).join('')}</div>`:'';
+    document.getElementById('prompt-rule-list').innerHTML=diagnosisHtml+currentPromptRules.map((rule,index)=>`<div class="prompt-rule-item" data-index="${index}" style="border:1px solid ${rule.conflict_reason?'rgba(239,68,68,.5)':'var(--border-color)'};">
+      <div class="prompt-rule-meta"><input type="checkbox" class="prompt-rule-selected" ${rule.selected!==false?'checked':''}><strong>规则 ${index+1}</strong><select class="form-control prompt-rule-action" style="width:120px;"><option ${rule.action==='ADD'?'selected':''}>ADD</option><option ${rule.action==='MODIFY'?'selected':''}>MODIFY</option><option ${rule.action==='DELETE'?'selected':''}>DELETE</option></select><span class="text-muted">${escapeHtml((rule.affected_fields||[]).join(', '))}</span>${rule.confidence!==null&&rule.confidence!==undefined?`<span class="badge badge-info">置信度 ${Math.round(rule.confidence*100)}%</span>`:''}</div>
+      <textarea class="form-control prompt-rule-text" rows="3" style="margin-top:7px;">${escapeHtml(rule.text)}</textarea>
+      <div style="margin-top:6px;"><label style="font-size:.75rem;">对应现有规则（修改/删除时必填）</label><textarea class="form-control prompt-rule-target" rows="2">${escapeHtml(rule.target_rule||'')}</textarea></div>
+      ${(rule.source_feedback_ids||[]).length?`<div style="margin-top:6px;color:#38bdf8;font-size:.78rem;">来源反馈：${escapeHtml(rule.source_feedback_ids.join(', '))}</div>`:''}
+      ${(rule.source_case_ids||[]).length?`<div style="margin-top:4px;color:#38bdf8;font-size:.78rem;">来源案例：${escapeHtml(rule.source_case_ids.join(', '))}</div>`:''}
+      ${rule.diagnosis?`<div style="margin-top:5px;">诊断：${escapeHtml(rule.diagnosis)} <span class="badge badge-info">${escapeHtml(rule.error_type||'UNKNOWN')}</span></div>`:''}
+      ${rule.expected_effect?`<div style="margin-top:4px;color:#34d399;">预期效果：${escapeHtml(rule.expected_effect)}</div>`:''}
+      ${(rule.risk_fields||[]).length?`<div style="margin-top:4px;color:#fbbf24;">风险字段：${escapeHtml(rule.risk_fields.join(', '))}</div>`:''}
+      ${rule.conflict_reason?`<div style="margin-top:6px;color:#f87171;">⚠ 规则冲突：${escapeHtml(rule.conflict_reason)}</div>`:''}
+      <button class="btn btn-xs btn-danger" style="margin-top:6px;" onclick="this.closest('.prompt-rule-item').remove()">删除此规则</button>
+    </div>`).join('');
+  };
+
+  window.finalizePromptRules = async function() {
+    if(!currentAdminJobId) return showToast('warning','没有可定稿的生成任务');
+    const rules=Array.from(document.querySelectorAll('.prompt-rule-item')).map(el=>{ const original=currentPromptRules[Number(el.dataset.index)]||{}; return {...original,selected:el.querySelector('.prompt-rule-selected').checked,action:el.querySelector('.prompt-rule-action').value,text:el.querySelector('.prompt-rule-text').value.trim(),target_rule:el.querySelector('.prompt-rule-target').value.trim()}; }).filter(x=>x.text);
+    if(!rules.some(x=>x.selected)) return showToast('warning','请至少保留一条规则');
+    const route=currentPromptJobType==='PROMPT_REFINEMENT'?'refinement-jobs':'optimization-jobs';
+    const res=await adminFetch(`/admin/prompts/${route}/${encodeURIComponent(currentAdminJobId)}/finalize`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rules})});
+    const body=await res.json(); if(!res.ok) return showToast('error',typeof body.detail==='string'?body.detail:JSON.stringify(body.detail));
+    const changes=body.data.change_set||{}; const panel=document.getElementById('prompt-change-set'); panel.style.display='block';
+    panel.innerHTML=`<strong>结构化规则变更</strong><div style="color:#34d399;margin-top:6px;">新增：${escapeHtml(JSON.stringify(changes.added||[]))}</div><div style="color:#fbbf24;margin-top:6px;">修改：${escapeHtml(JSON.stringify(changes.modified||[]))}</div><div style="color:#f87171;margin-top:6px;">删除：${escapeHtml(JSON.stringify(changes.deleted||[]))}</div>`;
+    setPromptWorkflowStep('quick');
+    await loadPromptVersions(); selectPromptVersion(body.data.prompt.id); showToast('success',body.message);
+  };
+
+  window.cancelCurrentAdminJob = async function() {
+    if(!currentAdminJobId) return; const res=await adminFetch(`/admin/jobs/${encodeURIComponent(currentAdminJobId)}/cancel`,{method:'POST'}); const body=await res.json(); showToast(res.ok?'warning':'error',body.message||body.detail||'取消失败');
+  };
+
+  window.cancelAdminJob = async function(jobId) {
+    currentAdminJobId=jobId;
+    localStorage.setItem('cargoCurrentAdminJob',jobId);
+    return cancelCurrentAdminJob();
+  };
+
+  window.toggleAdminJobDrawer = function() {
+    adminJobsExpanded=!adminJobsExpanded;
+    localStorage.setItem('cargoAdminJobsExpanded',adminJobsExpanded?'1':'0');
+    const drawer=document.getElementById('admin-job-drawer');
+    drawer?.classList.toggle('admin-job-drawer-collapsed',!adminJobsExpanded);
+    const button=document.getElementById('btn-toggle-admin-jobs');if(button)button.textContent=adminJobsExpanded?'收起':'展开';
+  };
+
+  async function startTrackedJob(url, onComplete) {
+    const res=await adminFetch(url,{method:'POST'}), body=await res.json();
+    if(!res.ok) throw new Error(typeof body.detail==='string'?body.detail:JSON.stringify(body.detail));
+    const id=body.data.id; currentAdminJobId=id; localStorage.setItem('cargoCurrentAdminJob',id); loadActiveAdminJobs();
+    consumeJobStream(id, async job=>{
+      loadActiveAdminJobs();
+      if(job.status==='COMPLETED'&&onComplete) await onComplete(job.result||{},job);
+      if(job.status==='FAILED'||job.status==='CANCELLED') showToast('error',jobErrorText(job));
+    }).catch(err=>showToast('error',`后台任务跟踪失败：${err.message}`));
+    return id;
+  }
+
+  window.loadActiveAdminJobs = async function() {
+    const res=await adminFetch('/admin/jobs'), body=await res.json(); if(!res.ok)return;
+    const jobs=(body.data||[]).slice(0,8), drawer=document.getElementById('admin-job-drawer'), list=document.getElementById('admin-job-list');
+    drawer.style.display=jobs.length?'block':'none';
+    drawer.classList.toggle('admin-job-drawer-collapsed',!adminJobsExpanded);
+    const toggle=document.getElementById('btn-toggle-admin-jobs');if(toggle)toggle.textContent=adminJobsExpanded?'收起':'展开';
+    list.innerHTML=jobs.map(job=>`<div style="padding:8px;border-top:1px solid var(--border-color);"><div style="display:flex;justify-content:space-between;"><span>${escapeHtml(job.job_type)}</span><span class="badge ${job.status==='COMPLETED'?'badge-success':job.status==='FAILED'||job.status==='CANCELLED'?'badge-danger':'badge-info'}">${escapeHtml(job.status)}</span></div><div style="font-size:.75rem;margin-top:4px;">${escapeHtml(jobStageSummary(job))} · ${job.progress_percent||0}%</div>${renderEvaluationStageSteps(job)}<div style="display:flex;gap:6px;margin-top:5px;">${job.status==='RUNNING'||job.status==='QUEUED'?`<button class="btn btn-xs btn-danger" onclick="cancelAdminJob('${job.id}')">取消</button>`:''}<button class="btn btn-xs btn-secondary" onclick="viewAdminJob('${job.id}')">查看</button></div>${job.error_code?`<div style="color:#f87171;font-size:.72rem;margin-top:4px;">${escapeHtml(jobErrorText(job))}</div>`:''}<div id="job-detail-${job.id}" style="font-size:.72rem;margin-top:5px;"></div></div>`).join('');
+  };
+
+  window.viewAdminJob = async function(jobId) {
+    const res=await adminFetch(`/admin/jobs/${encodeURIComponent(jobId)}`),body=await res.json();
+    if(!res.ok) return showToast('error',body.detail||'任务不存在');
+    const job=body.data; currentAdminJobId=job.id; localStorage.setItem('cargoCurrentAdminJob',job.id);
+    if(job.job_type==='PROMPT_GENERATION'||job.job_type==='PROMPT_REFINEMENT') return monitorPromptGenerationJob(job.id);
+    if(job.job_type==='PROMPT_EVALUATION'&&job.status==='COMPLETED') { currentPromptEvaluationJobId=job.id; renderPromptABResult(job.result||{},job); }
+    const target=document.getElementById(`job-detail-${job.id}`);
+    if(target) target.innerHTML=job.status==='COMPLETED' ? `用例 ${job.result?.total_cases||0} · 准确率 ${job.result?.overall_accuracy_percent??'-'}% · 核心退化 ${job.result?.critical_regressions_count||0}` : (job.error_code ? escapeHtml(jobErrorText(job)) : `当前阶段：${escapeHtml(job.phase)}`);
+    if(job.job_type==='BENCHMARK_EVALUATION'&&job.status==='COMPLETED'&&!(job.input_payload?.benchmark_ids||[]).length) {lastSuccessfulBenchmarkJobId=job.id;localStorage.setItem('cargoReleaseBenchmarkJob',job.id);renderBenchmarkJobResult(job.result||{});}
+  };
+
+  function renderBenchmarkJobResult(evalData) {
+    const card=document.getElementById('eval-result-card'),btnRelease=document.getElementById('btn-open-release-modal'); if(card)card.style.display='block';
+    const acc=evalData.overall_accuracy_percent??0,reg=evalData.critical_regressions_count||0,reasons=[];
+    document.getElementById('eval-total-cases').textContent=evalData.total_cases||0;document.getElementById('eval-overall-acc').textContent=`${acc}%`;document.getElementById('eval-regressions').textContent=`${reg} 个`;document.getElementById('eval-duration').textContent=`${evalData.duration_seconds||0}s`;
+    reasons.push(...(evalData.gate_reasons||[]));if(!reasons.length&&acc<80)reasons.push(`综合准确率 ${acc}% 低于 80%`);if(!reasons.length&&reg>0)reasons.push(`${reg} 个核心字段退化`);if(!evalData.total_cases)reasons.push('没有已人工确认且启用的金标');
+    const message=evalData.can_release?'✓ 发布门禁通过：准确率达标且无核心字段退化':`⚠ 发布门禁未通过：${reasons.join('；')||'评测未满足发布条件'}`;
+    ['eval-release-gate-msg','release-gate-reason'].forEach(id=>{const el=document.getElementById(id);if(el){el.style.color=evalData.can_release?'#34d399':'#f87171';el.textContent=message;}});if(btnRelease)btnRelease.disabled=!evalData.can_release;
+    const train=evalData.training||{},holdout=evalData.holdout||{};
+    const layer=document.getElementById('eval-layer-summary');if(layer)layer.innerHTML=`<div class="prompt-side-card"><h5>优化集</h5><div class="prompt-section-note">${train.passed_cases||0}/${train.total_cases||0} 通过 · 准确率 ${train.overall_accuracy_percent??0}%</div><div style="margin-top:5px;color:${train.can_release?'#34d399':'#f87171'};">${train.can_release?'✓ 通过':'✗ 未通过'}</div></div><div class="prompt-side-card"><h5>🔒 保密测试集</h5><div class="prompt-section-note">${holdout.passed_cases||0}/${holdout.total_cases||0} 通过 · 准确率 ${holdout.overall_accuracy_percent??0}%</div><div style="margin-top:5px;color:${holdout.can_release?'#34d399':'#f87171'};">${holdout.can_release?'✓ 门禁通过':'✗ 门禁未通过'} · 不展示答案与失败明细</div></div>`;
+    const details=document.getElementById('eval-case-details');if(details)details.innerHTML='<strong>优化集案例明细</strong>'+(evalData.case_results||[]).map(item=>`<div>${escapeHtml(item.title||item.case_id)}：${item.accuracy_percent??0}% ${item.error?`· ${escapeHtml(item.error)}`:''}</div>`).join('');
+  }
+
+  function prettyValue(value) {
+    if(value===undefined||value===null||value==='') return '<span class="text-muted">空</span>';
+    return `<pre style="white-space:pre-wrap;margin:0;max-width:360px;">${escapeHtml(typeof value==='string'?value:JSON.stringify(value,null,2))}</pre>`;
+  }
+
+  window.renderPromptABResult = function(data, job={}) {
+    setPromptWorkflowStep('full');
+    const comparison=data.ab_comparison||{}, summary=comparison.summary||{}, checks=data.gate_checks||comparison.gate_checks||[];
+    const ab=document.getElementById('prompt-ab-result'); ab.style.display='block';
+    const empty=document.getElementById('prompt-result-empty');if(empty)empty.style.display='none';
+    const failureMetric=document.getElementById('prompt-overview-failures');if(failureMetric)failureMetric.textContent=(summary.regressed||0)+(summary.still_wrong||0);
+    const accuracyMetric=document.getElementById('prompt-overview-accuracy');if(accuracyMetric)accuracyMetric.textContent=`${data.candidate?.overall_accuracy_percent??0}%`;
+    const sidebarGates=document.getElementById('prompt-sidebar-gates');if(sidebarGates)sidebarGates.innerHTML=checks.map(check=>`<div class="prompt-gate-item ${check.passed?'pass':'fail'}">${check.passed?'✓':'✗'} ${escapeHtml(check.label)}<div style="margin-top:2px;opacity:.8;">${escapeHtml(check.detail)}</div></div>`).join('')||'<div class="prompt-gate-item">没有门禁明细</div>';
+    if(job.id){currentPromptEvaluationJobId=job.id;localStorage.setItem('cargoPromptEvaluationJob',job.id);}
+    const labels={FIXED:'已修复',REGRESSED:'新增退化',STILL_WRONG:'持续错误',UNCHANGED_CORRECT:'保持正确'};
+    const colors={FIXED:'#34d399',REGRESSED:'#f87171',STILL_WRONG:'#fbbf24',UNCHANGED_CORRECT:'#94a3b8'};
+    const cases=(comparison.cases||[]).map(item=>{
+      const important=(item.field_comparisons||[]).filter(field=>field.classification!=='UNCHANGED_CORRECT');
+      const hasRegression=important.some(field=>field.classification==='REGRESSED');
+      return `<details style="margin-top:10px;border:1px solid var(--border-color);border-radius:10px;padding:12px;" ${hasRegression?'open':''}><summary style="cursor:pointer;"><strong>${escapeHtml(item.title||item.case_id)}</strong> · ${escapeHtml(item.doc_type||'GENERAL')} · 生产 ${item.baseline_accuracy_percent||0}% → 候选 ${item.candidate_accuracy_percent||0}% · 差异 ${important.length}</summary>
+        <div class="text-muted" style="margin:7px 0;">案例 ${escapeHtml(item.case_id||'')} · 文件 ${escapeHtml((item.source_files||[]).join(', ')||'-')}</div>
+        <div style="overflow:auto;"><table class="data-table"><thead><tr><th>字段</th><th>金标答案</th><th>生产结果</th><th>候选结果</th><th>结论</th></tr></thead><tbody>${important.map(field=>`<tr><td>${escapeHtml(field.field||'')}${field.is_critical?' <span class="badge badge-danger">关键</span>':''}</td><td>${prettyValue(field.expected)}</td><td>${prettyValue(field.baseline_actual)}</td><td>${prettyValue(field.candidate_actual)}</td><td style="color:${colors[field.classification]};font-weight:600;">${labels[field.classification]}</td></tr>`).join('')||'<tr><td colspan="5">无差异，候选保持全部字段正确</td></tr>'}</tbody></table></div>
+        <details style="margin-top:8px;"><summary>完整案例、金标与两版 JSON</summary><pre style="white-space:pre-wrap;max-height:420px;overflow:auto;">${escapeHtml(JSON.stringify({input_text:item.input_text,ground_truth:item.ground_truth,baseline:item.baseline_result,candidate:item.candidate_result},null,2))}</pre></details></details>`;
+    }).join('');
+    const gateHtml=checks.map(check=>`<div class="prompt-gate-item ${check.passed?'pass':'fail'}">${check.passed?'✓':'✗'} <strong>${escapeHtml(check.label)}</strong>：${escapeHtml(check.detail)}</div>`).join('');
+    const refinementButton=data.holdout_only_failure
+      ? '<button class="btn btn-sm btn-secondary" disabled title="保密集失败内容不能发送给 AI">🔒 保密集未通过，禁止直接据此优化</button>'
+      : data.no_regression
+      ? '<button class="btn btn-sm btn-primary" onclick="openPromptRefinement(\'CONTINUOUS_IMPROVEMENT\')">继续优化当前版本</button>'
+      : '<button class="btn btn-sm btn-primary" onclick="openPromptRefinement(\'FAILED_RECOVERY\')">基于本次失败继续优化</button>';
+    const holdout=data.holdout_comparison||{};
+    const holdoutHtml=holdout.total_cases!=null?`<div class="prompt-side-card" style="margin-top:12px;border-color:${holdout.can_release?'rgba(52,211,153,.35)':'rgba(248,113,113,.35)'};"><h5>🔒 保密测试集门禁</h5><div class="prompt-section-note">${holdout.total_cases||0} 个案例 · 生产 ${holdout.baseline_accuracy_percent??0}% → 候选 ${holdout.candidate_accuracy_percent??0}%</div><div style="margin-top:6px;color:${holdout.can_release?'#34d399':'#f87171'};">${holdout.can_release?'✓ 通过':'✗ 未通过'} · 为防止 AI 背题，不展示案例答案和字段差异</div></div>`:'';
+    ab.innerHTML=`<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;"><strong>A/B 回归完整结果</strong><div style="display:flex;gap:8px;">${refinementButton}</div></div>
+      <div style="display:grid;grid-template-columns:repeat(3,minmax(120px,1fr));gap:10px;margin-top:10px;"><div class="prompt-metric"><span>生产版本</span><strong>${data.baseline?.overall_accuracy_percent??0}%</strong></div><div class="prompt-metric"><span>候选版本</span><strong>${data.candidate?.overall_accuracy_percent??0}%</strong></div><div class="prompt-metric"><span>准确率变化</span><strong>${(data.accuracy_delta||0)>=0?'+':''}${data.accuracy_delta||0}%</strong></div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;"><span style="color:#34d399;">已修复 ${summary.fixed||0}</span><span style="color:#f87171;">新增退化 ${summary.regressed||0}</span><span style="color:#fbbf24;">持续错误 ${summary.still_wrong||0}</span></div>
+      <div class="prompt-gate-list">${gateHtml}</div>${holdoutHtml}${cases}`;
+  };
+
+  window.openPromptRefinement = function(mode='FAILED_RECOVERY') {
+    if(!currentPromptEvaluationJobId)return showToast('warning','找不到本次评测任务，请从后台任务重新打开结果');
+    document.getElementById('prompt-refinement-mode').value=mode;
+    document.getElementById('prompt-refinement-title').textContent=mode==='FAILED_RECOVERY'?'基于本次失败继续优化':'继续优化当前版本';
+    document.getElementById('prompt-refinement-subtitle').textContent=mode==='FAILED_RECOVERY'?'选择本轮修复重点，并补充希望 AI 遵守的边界。':'当前版本已通过门禁；本次将创建新的子版本，原版本保持不变。';
+    document.querySelectorAll('input[name="prompt-refinement-direction"]').forEach(input=>input.checked=false);
+    document.getElementById('prompt-refinement-instruction').value='';
+    const feedbackIds=Array.from(document.querySelectorAll('.prompt-feedback-checkbox:checked')).map(el=>el.value);
+    document.getElementById('prompt-refinement-feedback-note').textContent=feedbackIds.length?`将同时带入当前勾选的 ${feedbackIds.length} 条已审核人工反馈。选择“使用新的人工反馈”后，AI 才会将其作为重点优化方向。`:'当前没有勾选人工反馈；如需使用新反馈，请先关闭窗口并在证据区勾选。';
+    openModal('modal-prompt-refinement');
+  };
+
+  window.refineFromFailedEvaluation = function() { openPromptRefinement('FAILED_RECOVERY'); };
+
+  window.submitPromptRefinement = async function() {
+    if(!currentPromptEvaluationJobId)return showToast('warning','找不到本次评测任务');
+    const directions=Array.from(document.querySelectorAll('input[name="prompt-refinement-direction"]:checked')).map(el=>el.value);
+    const instruction=document.getElementById('prompt-refinement-instruction').value.trim();
+    const feedbackIds=Array.from(document.querySelectorAll('.prompt-feedback-checkbox:checked')).map(el=>el.value);
+    if(!directions.length&&!instruction)return showToast('warning','请至少选择一个优化方向，或填写人工补充指示');
+    if(directions.includes('CUSTOM')&&!instruction)return showToast('warning','选择自定义目标后，请填写人工补充指示');
+    if(directions.includes('USE_NEW_FEEDBACK')&&!feedbackIds.length)return showToast('warning','选择使用新的人工反馈时，请先勾选至少一条已审核反馈');
+    const res=await adminFetch('/admin/prompts/refinement-jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({evaluation_job_id:currentPromptEvaluationJobId,optimization_directions:directions,optimization_instruction:instruction,optimization_goal:instruction||null,feedback_ids:feedbackIds})});
+    const body=await res.json();if(!res.ok)return showToast('error',typeof body.detail==='string'?body.detail:JSON.stringify(body.detail));
+    closeModal('modal-prompt-refinement');
+    currentAdminJobId=body.data.id;currentPromptJobType='PROMPT_REFINEMENT';localStorage.setItem('cargoCurrentAdminJob',currentAdminJobId);setPromptWorkflowStep('diagnosis');showToast('info',body.message);monitorPromptGenerationJob(currentAdminJobId);
+  };
+
+  window.quickEvaluateSelectedPrompt = async function() {
+    const id=document.getElementById('prompt-selected-id').value;if(!id)return showToast('warning','请先选择 V2/V3 候选');
+    setPromptWorkflowStep('quick');
+    try{await startTrackedJob(`/admin/jobs/prompt-quick-evaluation/${encodeURIComponent(id)}`,data=>{showToast(data.all_failed_cases_fixed?'success':'warning',`${data.notice} 当前 ${data.passed_cases||0}/${data.total_cases||0} 个案例通过。`);renderBenchmarkJobResult(data);});showToast('info','失败案例快速回归已启动');}catch(err){showToast('error',`快速回归失败：${err.message}`);}
+  };
+
+  window.evaluateSelectedPrompt = async function() {
+    const id = document.getElementById('prompt-selected-id').value;
+    if (!id) return showToast('warning', '请先选择或保存一个候选版本');
+    try {
+      setPromptWorkflowStep('full');
+      await startTrackedJob(`/admin/jobs/prompt-evaluation/${encodeURIComponent(id)}`,async (data,job)=>{renderPromptABResult(data,job);await loadPromptVersions();});
+      showToast('info','A/B 回归已转入后台，可离开页面后再查看');
+    } catch (err) { showToast('error', `候选回归失败: ${err.message}`); }
+  };
+
+  window.activateSelectedPrompt = async function() {
+    const id = document.getElementById('prompt-selected-id').value;
+    if (!id) return showToast('warning', '请先选择提示词版本');
+    const confirmed = await showConfirmModal({title:'启用提示词', message:'仅已通过绑定回归的版本可以启用。确认切换生产提示词吗？', confirmText:'确认启用', type:'warning'});
+    if (!confirmed) return;
+    try {
+      const res = await adminFetch(`/admin/prompts/${encodeURIComponent(id)}/activate`, {method:'POST'});
+      const body = await res.json();
+      if (!res.ok) throw new Error(typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail));
+      showToast('success', body.message);
+      await loadPromptVersions();
+      selectPromptVersion(id);
+    } catch (err) { showToast('error', `启用失败: ${err.message}`); }
+  };
+
+  window.exportBenchmarks = async function() {
+    try {
+      const res = await adminFetch('/admin/benchmarks-export.jsonl');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'benchmark.jsonl'; a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) { showToast('error', `导出失败: ${err.message}`); }
   };
 
   window.loadAdminFeedbacks = async function() {
@@ -3102,6 +3710,7 @@ MEAS: 68.000 CBM`;
     const comment = document.getElementById('fd-review-comment')?.value.trim() || '';
     const autoRefund = document.getElementById('fd-auto-refund')?.checked ?? true;
     const createFewShot = document.getElementById('fd-create-fewshot')?.checked ?? true;
+    const documentType = document.getElementById('fd-document-type')?.value || 'GENERAL';
 
     const actionUrl = actionStatus === 'ACCEPTED'
       ? `/admin/feedbacks/${currentAuditFeedbackId}/accept`
@@ -3118,6 +3727,7 @@ MEAS: 68.000 CBM`;
           auto_refund: autoRefund,
           create_few_shot: createFewShot,
           create_benchmark: true,
+          document_type: documentType,
         }),
       });
 
@@ -3149,29 +3759,31 @@ MEAS: 68.000 CBM`;
       const items = data.data || [];
 
       if (items.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-8">暂无动态 Few-Shot 样本，点击右上角新增或通过审核采纳自动生成</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-8">暂无动态 Few-Shot 样本，点击右上角新增或通过审核采纳自动生成</td></tr>';
         return;
       }
 
       tbody.innerHTML = items.map(it => `
         <tr>
           <td><strong>${escapeHtml(it.title)}</strong></td>
+          <td><span class="badge ${it.source_tenant_id ? 'badge-info' : 'badge-warning'}">${it.source_tenant_id ? `租户 ${escapeHtml(it.source_tenant_id)}` : '全局·所有租户'}</span></td>
           <td><span class="badge badge-info font-mono">${escapeHtml(it.doc_type)}</span></td>
           <td><strong class="font-mono">${it.priority}</strong></td>
           <td>
-            <button type="button" class="btn btn-xs ${it.is_active ? 'btn-success' : 'btn-secondary'}" onclick="toggleFewShotActive('${it.id}', ${it.is_active})">
-              ${it.is_active ? '已启用 (注入Prompt)' : '已禁用'}
-            </button>
+            ${it.lifecycle_status === 'DRAFT' || it.lifecycle_status === 'FAILED'
+              ? `<button type="button" class="btn btn-xs btn-warning" onclick="evaluateFewShot('${it.id}')">${it.lifecycle_status === 'FAILED' ? '回归未通过·重试' : '候选·运行回归'}</button>`
+              : `<button type="button" class="btn btn-xs ${it.is_active ? 'btn-success' : 'btn-secondary'}" onclick="toggleFewShotActive('${it.id}', ${it.is_active})">${it.is_active ? '已启用 (注入Prompt)' : '已验证·未启用'}</button>`}
           </td>
           <td style="max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--font-mono); font-size:0.75rem;">${escapeHtml(it.input_excerpt)}</td>
           <td class="text-muted" style="font-size:0.75rem;">${formatDate(it.updated_at || it.created_at)}</td>
           <td>
+            <button class="btn btn-xs btn-secondary" onclick="openFewShotEditExisting('${it.id}')">查看/编辑</button>
             <button class="btn btn-xs btn-danger" onclick="deleteFewShot('${it.id}')">删除</button>
           </td>
         </tr>
       `).join('');
     } catch (err) {
-      tbody.innerHTML = `<tr><td colspan="7" class="text-center text-danger py-8">加载 Few-Shot 失败: ${escapeHtml(err.message)}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="8" class="text-center text-danger py-8">加载 Few-Shot 失败: ${escapeHtml(err.message)}</td></tr>`;
     }
   };
 
@@ -3186,7 +3798,28 @@ MEAS: 68.000 CBM`;
     openModal('modal-few-shot-edit');
   };
 
+  window.openFewShotEditExisting = async function(fsId) {
+    try {
+      const res = await adminFetch(`/admin/few-shots/${encodeURIComponent(fsId)}`);
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
+      const item = body.data;
+      document.getElementById('fse-id').value = item.id;
+      document.getElementById('fse-title').textContent = `查看/编辑 Few-Shot · ${item.scope === 'GLOBAL' ? '全局范围' : (item.tenant_name || item.source_tenant_id)}`;
+      document.getElementById('fse-name').value = item.title || '';
+      document.getElementById('fse-doctype').value = item.doc_type || 'GENERAL';
+      document.getElementById('fse-priority').value = item.priority || 20;
+      document.getElementById('fse-input').value = item.input_excerpt || '';
+      document.getElementById('fse-output').value = JSON.stringify(item.expected_output || {}, null, 2);
+      document.getElementById('fse-active').checked = Boolean(item.is_active);
+      openModal('modal-few-shot-edit');
+    } catch (err) {
+      showToast('error', `加载 Few-Shot 详情失败: ${err.message}`);
+    }
+  };
+
   window.saveFewShotExample = async function() {
+    const existingId = document.getElementById('fse-id').value;
     const title = document.getElementById('fse-name').value.trim();
     const docType = document.getElementById('fse-doctype').value.trim() || 'GENERAL';
     const priority = parseInt(document.getElementById('fse-priority').value) || 20;
@@ -3208,8 +3841,8 @@ MEAS: 68.000 CBM`;
     }
 
     try {
-      const res = await adminFetch('/admin/few-shots', {
-        method: 'POST',
+      const res = await adminFetch(existingId ? `/admin/few-shots/${encodeURIComponent(existingId)}` : '/admin/few-shots', {
+        method: existingId ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title,
@@ -3222,7 +3855,7 @@ MEAS: 68.000 CBM`;
       });
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      showToast('success', 'Few-Shot 样本保存成功，已热加载注入 Prompt！');
+      showToast('success', 'Few-Shot 候选已保存；请先运行金标回归，通过后再启用。');
       closeModal('modal-few-shot-edit');
       loadAdminFewShots();
     } catch (err) {
@@ -3242,6 +3875,15 @@ MEAS: 68.000 CBM`;
       loadAdminFewShots();
     } catch (err) {
       showToast('error', '状态切换失败: ' + err.message);
+    }
+  };
+
+  window.evaluateFewShot = async function(fsId) {
+    try {
+      await startTrackedJob(`/admin/jobs/few-shot-evaluation/${encodeURIComponent(fsId)}`,async data=>{showToast(data.can_release?'success':'warning',`Few-Shot 回归完成：准确率 ${data.overall_accuracy_percent}%`);loadAdminFewShots();});
+      showToast('info','Few-Shot 回归已在后台运行');
+    } catch (err) {
+      showToast('error', `Few-Shot 回归失败: ${err.message}`);
     }
   };
 
@@ -3272,52 +3914,18 @@ MEAS: 68.000 CBM`;
     const label = document.getElementById('btn-run-eval-label');
     const card = document.getElementById('eval-result-card');
     const btnRelease = document.getElementById('btn-open-release-modal');
-
     if (btn) btn.disabled = true;
     if (btnRelease) btnRelease.disabled = true;
-    if (label) label.textContent = '评测执行中 (正在并发重跑金标用例)...';
-
+    if (label) label.textContent = '后台评测已启动…';
     try {
-      const res = await adminFetch('/admin/evaluation/run', { method: 'POST' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const evalData = data.data || {};
-
-      if (card) card.style.display = 'block';
-      document.getElementById('eval-total-cases').textContent = evalData.total_cases || 0;
-
-      const accEl = document.getElementById('eval-overall-acc');
-      const accVal = evalData.overall_accuracy_percent ?? 0.0;
-      accEl.textContent = `${accVal}%`;
-      accEl.style.color = accVal >= 90 ? '#34d399' : (accVal >= 80 ? '#fbbf24' : '#f87171');
-
-      const regEl = document.getElementById('eval-regressions');
-      const regVal = evalData.critical_regressions_count || 0;
-      regEl.textContent = `${regVal} 个`;
-      regEl.style.color = regVal === 0 ? '#34d399' : '#f87171';
-
-      document.getElementById('eval-duration').textContent = `${evalData.duration_seconds || 0}s`;
-
-      const gateMsg = document.getElementById('eval-release-gate-msg');
-      if (evalData.can_release) {
-        gateMsg.style.background = 'rgba(16, 185, 129, 0.15)';
-        gateMsg.style.border = '1px solid rgba(16, 185, 129, 0.4)';
-        gateMsg.style.color = '#34d399';
-        gateMsg.innerHTML = '✓ 全量金标回归评测通过！未检测到核心关键字段退化，准确率达标，准予发布新版本。';
-        if (btnRelease) btnRelease.disabled = false;
-      } else {
-        gateMsg.style.background = 'rgba(239, 68, 68, 0.15)';
-        gateMsg.style.border = '1px solid rgba(239, 68, 68, 0.4)';
-        gateMsg.style.color = '#f87171';
-        gateMsg.innerHTML = `⚠️ 评测门禁拦截: 检测到 ${regVal} 个核心关键字段回退或综合准确率不足 80%，请先调整少样本/规则后再发布。`;
-        if (btnRelease) btnRelease.disabled = true;
-      }
-
-      showToast('success', '金标回归评测执行完毕！');
+      await startTrackedJob('/admin/jobs/benchmark-evaluation',async (evalData,job)=>{
+        lastSuccessfulBenchmarkJobId=job.id;localStorage.setItem('cargoReleaseBenchmarkJob',job.id);
+        renderBenchmarkJobResult(evalData);
+        showToast(evalData.can_release?'success':'warning',evalData.can_release?'双层金标发布门禁通过':`发布门禁未通过：${(evalData.gate_reasons||[]).join('；')||'请查看评测结果'}`);if(btn)btn.disabled=false;if(label)label.textContent='▶ 运行全量金标回归评测';
+      });
     } catch (err) {
       if (btnRelease) btnRelease.disabled = true;
       showToast('error', '回归评测失败: ' + err.message);
-    } finally {
       if (btn) btn.disabled = false;
       if (label) label.textContent = '▶ 运行全量金标回归评测';
     }
@@ -3349,6 +3957,7 @@ MEAS: 68.000 CBM`;
           version_tag: versionTag,
           changelog,
           mark_accepted_as_resolved: markResolved,
+          evaluation_job_id: lastSuccessfulBenchmarkJobId || null,
         }),
       });
 

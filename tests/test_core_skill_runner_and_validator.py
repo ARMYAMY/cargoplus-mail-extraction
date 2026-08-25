@@ -54,6 +54,19 @@ def test_validator_cargo_v3():
     assert isinstance(errs, list)
 
 
+def test_skill_runner_selects_cargo_json_from_multiple_objects():
+    content = '{"trace":"thinking"}\n{"ShipperName":"ACME","BLNo":"BL123"}'
+    parsed = SkillRunner._parse_json_object_response(content)
+    assert parsed["ShipperName"] == "ACME"
+    assert parsed["BLNo"] == "BL123"
+
+    wrapped = '{"final_json":{"PODName":"HAMBURG"},"audit":{}}'
+    assert SkillRunner._parse_json_object_response(wrapped) == {"PODName": "HAMBURG"}
+
+    with pytest.raises(ValueError, match="CargoPlus"):
+        SkillRunner._parse_json_object_response('{"trace":"only metadata"}')
+
+
 @pytest.mark.asyncio
 async def test_skill_runner_flow_and_correction():
     runner = SkillRunner()

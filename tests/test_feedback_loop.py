@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.main import app
 from app.database import AsyncSessionLocal, init_db
 from app.models.billing import BillingTransaction
-from app.models.feedback import TaskFeedback
+from app.models.feedback import BenchmarkCase, TaskFeedback
 from app.models.task import EmailTask
 from app.models.tenant import ApiKey, Tenant
 from app.services.auth_service import create_access_token, generate_api_key_and_secret, hash_password
@@ -204,6 +204,44 @@ async def test_feedback_loop_end_to_end():
         assert res_fs.status_code == 200
         fs_items = res_fs.json()["data"]
         assert len(fs_items) >= 1
+
+        # Newly generated benchmark truth is only a draft until an administrator
+        # explicitly verifies it; unverified model output must never enter gold.
+        res_benchmarks = await client.get(
+            "/admin/benchmarks",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        benchmark = next(item for item in res_benchmarks.json()["data"] if item["feedback_id"] == fb_id)
+        assert benchmark["verification_status"] == "DRAFT"
+        assert benchmark["is_active"] is False
+        res_verify = await client.put(
+            f"/admin/benchmarks/{benchmark['id']}",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"verification_status": "VERIFIED", "ground_truth": benchmark["ground_truth"]},
+        )
+        assert res_verify.status_code == 200, res_verify.text
+
+        # Release now requires an unseen holdout layer in addition to the
+        # feedback-driven optimization set.
+        async with AsyncSessionLocal() as db:
+            existing_holdout = (
+                await db.execute(select(BenchmarkCase).where(BenchmarkCase.id == "bm_feedback_holdout"))
+            ).scalar_one_or_none()
+            if existing_holdout:
+                await db.delete(existing_holdout)
+                await db.flush()
+            db.add(BenchmarkCase(
+                id="bm_feedback_holdout",
+                title="保密发布门禁样本",
+                doc_type="GENERAL",
+                dataset_role="HOLDOUT",
+                input_text="holdout",
+                ground_truth=corrected,
+                is_active=True,
+                verification_status="VERIFIED",
+                verified_by="admin",
+            ))
+            await db.commit()
 
         # 7. Admin triggers Regression Evaluation
         with patch.object(

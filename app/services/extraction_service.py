@@ -5,7 +5,7 @@ import json
 import logging
 from pathlib import Path
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 import uuid
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +20,7 @@ from app.core.parser import process_uploaded_files
 from app.core.validator import default_validator
 from app.services.billing_service import BillingService
 from app.services.few_shot_service import FewShotService
+from app.services.prompt_service import PromptService
 from app.services.vision_service import VisionBudget, VisionService
 from app.services.webhook_dispatcher import dispatch_webhook
 
@@ -145,16 +146,24 @@ class ExtractionService:
 
             # Step 2: Extract Draft JSON using SenseTime LLM with dynamic Few-Shot injection
             few_shot_snippet = ""
+            prompt_template = None
             try:
                 async with AsyncSessionLocal() as db_fs:
                     few_shot_snippet = await FewShotService.build_few_shot_prompt_section(
                         db_fs,
                         tenant_id=tenant_id,
+                        doc_type=FewShotService.detect_document_type(payload),
                     )
+                    active_prompt = await PromptService.get_active(db_fs)
+                    prompt_template = active_prompt.content if active_prompt else None
             except Exception as fs_err:
                 logger.debug("FewShot prompt snippet loading skipped: %s", fs_err)
 
-            draft_json = await default_skill_runner.extract_draft_json(payload, few_shot_snippet=few_shot_snippet)
+            draft_json = await default_skill_runner.extract_draft_json(
+                payload,
+                few_shot_snippet=few_shot_snippet,
+                prompt_template=prompt_template,
+            )
 
             # Step 3: Normalize with Skill V3 Rules
             final_v3_json = default_normalizer.normalize(draft_json)
@@ -296,6 +305,73 @@ class ExtractionService:
                         await db.commit()
 
     @classmethod
+    async def prepare_mail_payload(
+        cls,
+        subject: str = "",
+        body: str = "",
+        attachment_paths: Optional[List[str]] = None,
+        parser_stage_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    ) -> SkillV3InputPayload:
+        """Parse files and run OCR once, returning a reusable model input payload."""
+        if attachment_paths:
+            file_paths = [Path(p) for p in attachment_paths if Path(p).exists()]
+            if file_paths:
+                vision_budget = VisionBudget(settings.VISION_MAX_IMAGES_PER_TASK)
+                return await asyncio.to_thread(
+                    process_uploaded_files,
+                    file_paths=file_paths,
+                    subject=subject,
+                    body=body,
+                    temp_dir=settings.uploads_path,
+                    vision_budget=vision_budget,
+                    stage_callback=parser_stage_callback,
+                )
+        return SkillV3InputPayload(mail_subject=subject, mail_body=body, attachments=[])
+
+    @classmethod
+    async def extract_prepared_payload(
+        cls,
+        db: AsyncSession,
+        payload: SkillV3InputPayload,
+        tenant_id: Optional[str] = None,
+        prompt_template: Optional[str] = None,
+        extra_few_shot_snippet: str = "",
+        model_progress_callback: Optional[
+            Callable[[str, Dict[str, Any]], Awaitable[None]]
+        ] = None,
+    ) -> Dict[str, Any]:
+        """Run prompt extraction against an already parsed/OCR'd payload."""
+        if prompt_template is None:
+            try:
+                active_prompt = await PromptService.get_active(db)
+                prompt_template = active_prompt.content if active_prompt else None
+            except Exception as prompt_err:
+                logger.debug("Active prompt loading skipped: %s", prompt_err)
+
+        few_shot_snippet = ""
+        try:
+            few_shot_snippet = await FewShotService.build_few_shot_prompt_section(
+                db,
+                tenant_id=tenant_id,
+                doc_type=FewShotService.detect_document_type(payload),
+            )
+        except Exception as fs_err:
+            logger.debug("FewShot prompt snippet loading skipped: %s", fs_err)
+        if extra_few_shot_snippet:
+            few_shot_snippet = "\n\n".join(
+                part for part in (few_shot_snippet, extra_few_shot_snippet) if part
+            )
+
+        draft_json = await default_skill_runner.extract_draft_json(
+            payload,
+            few_shot_snippet=few_shot_snippet,
+            prompt_template=prompt_template,
+            progress_callback=model_progress_callback,
+        )
+        final_v3_json = default_normalizer.normalize(draft_json)
+        return final_v3_json
+
+    @classmethod
     async def extract_mail_content(
         cls,
         db: AsyncSession,
@@ -303,36 +379,28 @@ class ExtractionService:
         body: str = "",
         attachment_paths: Optional[List[str]] = None,
         tenant_id: Optional[str] = None,
+        prompt_template: Optional[str] = None,
+        extra_few_shot_snippet: str = "",
+        parser_stage_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        model_progress_callback: Optional[
+            Callable[[str, Dict[str, Any]], Awaitable[None]]
+        ] = None,
+        prepared_payload: Optional[SkillV3InputPayload] = None,
     ) -> Dict[str, Any]:
-        """
-        Directly extracts and normalizes mail/document content (used for benchmark evaluation and sync extraction).
-        """
-        few_shot_snippet = ""
-        try:
-            few_shot_snippet = await FewShotService.build_few_shot_prompt_section(
-                db,
-                tenant_id=tenant_id,
+        """Parse/OCR and extract content in one call for normal application flows."""
+        payload = prepared_payload
+        if payload is None:
+            payload = await cls.prepare_mail_payload(
+                subject=subject,
+                body=body,
+                attachment_paths=attachment_paths,
+                parser_stage_callback=parser_stage_callback,
             )
-        except Exception as fs_err:
-            logger.debug("FewShot prompt snippet loading skipped: %s", fs_err)
-
-        if attachment_paths:
-            file_paths = [Path(p) for p in attachment_paths if Path(p).exists()]
-            if file_paths:
-                vision_budget = VisionBudget(settings.VISION_MAX_IMAGES_PER_TASK)
-                payload = await asyncio.to_thread(
-                    process_uploaded_files,
-                    file_paths=file_paths,
-                    subject=subject,
-                    body=body,
-                    temp_dir=settings.uploads_path,
-                    vision_budget=vision_budget,
-                )
-            else:
-                payload = SkillV3InputPayload(mail_subject=subject, mail_body=body, attachments=[])
-        else:
-            payload = SkillV3InputPayload(mail_subject=subject, mail_body=body, attachments=[])
-
-        draft_json = await default_skill_runner.extract_draft_json(payload, few_shot_snippet=few_shot_snippet)
-        final_v3_json = default_normalizer.normalize(draft_json)
-        return final_v3_json
+        return await cls.extract_prepared_payload(
+            db=db,
+            payload=payload,
+            tenant_id=tenant_id,
+            prompt_template=prompt_template,
+            extra_few_shot_snippet=extra_few_shot_snippet,
+            model_progress_callback=model_progress_callback,
+        )
