@@ -275,6 +275,18 @@ async def test_llm_connection(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
                 detail={"code": 50401, "message": f"请求超时 (15s)，无法连接至 {url}，请检查网络或 Base URL 是否可达"},
             )
+        except httpx.ConnectError as exc:
+            logger.warning("LLM connectivity probe could not reach %s: %s", url, exc)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "code": 50202,
+                    "message": (
+                        "无法建立到大模型接口的网络连接。请检查 Base URL、DNS、代理，"
+                        "并确认 8001 服务进程具有外网访问权限"
+                    ),
+                },
+            ) from exc
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,

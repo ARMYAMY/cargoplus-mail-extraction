@@ -50,7 +50,11 @@ class AdminJobService:
                 await cls.fail(job_id, "INTERRUPTED", "服务重载导致任务中断，可重新发起", status="FAILED")
             raise
         except httpx.ConnectError as exc:
-            await cls.fail(job_id, "CONNECTION_FAILED", f"连接模型服务失败: {exc}")
+            await cls.fail(
+                job_id,
+                "CONNECTION_FAILED",
+                "无法连接模型服务；请检查 Base URL、DNS、代理及 8001 进程的外网访问权限",
+            )
         except httpx.TimeoutException as exc:
             await cls.fail(job_id, "TIMEOUT", f"模型或评测请求超时: {exc}")
         except httpx.HTTPStatusError as exc:

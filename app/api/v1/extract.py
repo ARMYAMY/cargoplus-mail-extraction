@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 ALLOWED_UPLOAD_EXTENSIONS = {
-    ".eml", ".pdf", ".xlsx", ".docx", ".doc",
+    ".eml", ".pdf", ".xlsx", ".xls", ".docx", ".doc",
     ".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff",
     ".txt", ".csv", ".json", ".md",
 }
@@ -209,10 +209,10 @@ async def extract_async_json(
     "/extract/async/upload",
     response_model=TaskAsyncResponse,
     summary="异步提交邮件抽取任务 (原始文件上传模式)",
-    description="支持直接上传 .eml 邮件、.pdf/.xlsx/.docx/.doc 附件及图片文件，由系统自动解析并进行 V3 字段抽取。",
+    description="支持直接上传 .eml 邮件、.pdf/.xlsx/.xls/.docx/.doc 附件及图片文件，由系统自动解析并进行 V3 字段抽取。",
 )
 async def extract_async_upload(
-    files: List[UploadFile] = File(..., description="上传的文件列表（支持 .eml, .pdf, .xlsx, .docx, .doc, 图片等）"),
+    files: List[UploadFile] = File(..., description="上传的文件列表（支持 .eml, .pdf, .xlsx, .xls, .docx, .doc, 图片等）"),
     mail_subject: Optional[str] = Form("", description="可选补充的邮件主题"),
     callback_url: Optional[str] = Form(None, description="Webhook 回调地址"),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),

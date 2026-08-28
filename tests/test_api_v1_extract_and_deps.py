@@ -65,8 +65,8 @@ async def test_extract_sync_and_async_endpoints():
 
     mock_llm_result = {
         "ShipperName": "SHANGHAI CARGO CO",
-        "POL": "SHANGHAI",
-        "POD": "ROTTERDAM",
+        "POLName": "SHANGHAI",
+        "PODName": "ROTTERDAM",
         "ContainerInfo": [
             {"ContainerNo": "MSCU1234567", "ContType": "40HQ"}
         ],
@@ -90,7 +90,7 @@ async def test_extract_sync_and_async_endpoints():
             assert res.status_code == 200
             data = res.json()
             assert data["task_id"] is not None
-            assert data["data"]["POL"] == "SHANGHAI"
+            assert data["data"]["POLName"] == "SHANGHAI"
             assert Decimal(str(data["charged_amount"])) == Decimal("1.0000")
 
             # 2. Async extraction (JSON payload)
@@ -117,6 +117,17 @@ async def test_extract_sync_and_async_endpoints():
             )
             assert res_file.status_code == 200
             assert "task_id" in res_file.json()
+
+            # 4. Legacy Excel files pass the same upload entry point.
+            xls_files = [("files", ("packing_list.xls", io.BytesIO(b"legacy-xls-payload"), "application/vnd.ms-excel"))]
+            res_xls = await client.post(
+                "/api/v1/extract/async/upload",
+                headers={"Authorization": f"Bearer {raw_key}"},
+                files=xls_files,
+                data={"mail_subject": "Legacy Excel Upload Test"},
+            )
+            assert res_xls.status_code == 200
+            assert "task_id" in res_xls.json()
 
 
 @pytest.mark.asyncio

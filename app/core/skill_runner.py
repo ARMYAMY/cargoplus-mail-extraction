@@ -261,6 +261,14 @@ class SkillRunner:
                     last_error = f"LLM Timeout ({request_timeout:g}s)"
                     logger.warning(f"LLM timeout on attempt {attempt+1}: {te}")
                     await asyncio.sleep(min(2 ** attempt, 10) + random.uniform(0, 0.5))
+                except httpx.ConnectError as ce:
+                    await record_llm_attempt("connection_failed", time.monotonic() - attempt_started)
+                    last_error = (
+                        "无法建立到大模型服务的网络连接；请检查 Base URL、DNS、代理，"
+                        "以及 8001 服务进程是否具有外网访问权限"
+                    )
+                    logger.warning("LLM connection failed on attempt %s: %s", attempt + 1, ce)
+                    await asyncio.sleep(min(2 ** attempt, 10) + random.uniform(0, 0.5))
                 except NonRetryableLLMError:
                     raise
                 except Exception as e:

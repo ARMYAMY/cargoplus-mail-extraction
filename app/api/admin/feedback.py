@@ -4,10 +4,12 @@ import hashlib
 import shutil
 import asyncio
 import httpx
+import re
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
 from typing import Any, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -31,7 +33,9 @@ from app.schemas.feedback import (
     PromptRefineRequest,
     PromptFinalizeRequest,
     BenchmarkUpdateRequest,
+    complete_benchmark_errors,
 )
+from app.schemas.cargo_v3 import CargoV3Output
 from app.services.billing_service import BillingService
 from app.services.evaluation_service import EvaluationService, build_ab_comparison, build_field_diff_rows
 from app.services.few_shot_service import FewShotService
@@ -42,6 +46,12 @@ from app.services.admin_job_service import AdminJobService, JobCancelled, job_pa
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", dependencies=[Depends(verify_admin_access)], tags=["Admin Feedback & Optimization"])
+
+BENCHMARK_ALLOWED_EXTENSIONS = {
+    ".eml", ".pdf", ".xlsx", ".xls", ".docx", ".doc",
+    ".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff",
+    ".txt", ".csv", ".json", ".md",
+}
 
 
 def utc_now():
@@ -382,14 +392,10 @@ async def accept_feedback(
                 digest = _sha256_file(destination)
                 copied_files.append(str(destination))
                 file_hashes[safe_name] = digest
-        # Only fields explicitly corrected by the customer and reviewed by the
-        # administrator are eligible ground truth. Other values originated from
-        # the model itself and must never silently become gold labels.
-        reviewed_truth = {
-            field: (fb.corrected_result or {}).get(field)
-            for field in (fb.diff_fields or [])
-            if field in (fb.corrected_result or {})
-        }
+        # Store the complete corrected result as an untrusted draft. It cannot
+        # enter regression until an administrator reviews all 57 fields and
+        # explicitly verifies it.
+        reviewed_truth = dict(fb.corrected_result or {})
         bm = BenchmarkCase(
             feedback_id=fb.id,
             doc_type=payload.document_type or "GENERAL",
@@ -721,9 +727,111 @@ def _layered_evaluation_result(training: dict, holdout: dict) -> dict:
 
 
 async def _run_layered_evaluation(db: AsyncSession, **kwargs) -> dict:
+    kwargs.setdefault("require_complete", True)
     training = await EvaluationService.run_benchmark_evaluation(db, dataset_role="TRAIN", **kwargs)
     holdout = await EvaluationService.run_benchmark_evaluation(db, dataset_role="HOLDOUT", **kwargs)
     return _layered_evaluation_result(training, holdout)
+
+
+@router.post("/benchmarks/import", summary="人工导入完整金标案例")
+async def import_benchmark(
+    title: str = Form(..., min_length=1, max_length=255),
+    doc_type: str = Form("GENERAL", min_length=1, max_length=64),
+    dataset_role: str = Form("TRAIN"),
+    weight: int = Form(1, ge=1, le=100),
+    ground_truth_json: str = Form(...),
+    files: List[UploadFile] = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    if dataset_role not in {"TRAIN", "HOLDOUT"}:
+        raise HTTPException(status_code=422, detail="数据用途只允许 TRAIN 或 HOLDOUT")
+    if not files:
+        raise HTTPException(status_code=422, detail="完整金标必须上传至少一个原始文件")
+    if len(files) > settings.MAX_UPLOAD_FILES:
+        raise HTTPException(status_code=413, detail=f"一次最多上传 {settings.MAX_UPLOAD_FILES} 个文件")
+    try:
+        ground_truth = json.loads(ground_truth_json)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"标准答案 JSON 无效: {exc}") from exc
+    completeness_errors = complete_benchmark_errors(ground_truth)
+    if completeness_errors:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "只能导入完整 57 字段金标", "errors": completeness_errors[:10]},
+        )
+    if len(ground_truth_json.encode("utf-8")) > 64 * 1024:
+        raise HTTPException(status_code=413, detail="标准答案 JSON 超过 64 KiB")
+
+    for upload in files:
+        raw_name = Path(upload.filename or "file").name
+        if Path(raw_name).suffix.lower() not in BENCHMARK_ALLOWED_EXTENSIONS:
+            raise HTTPException(status_code=415, detail=f"不支持的文件类型: {raw_name}")
+
+    case_id = f"bm_{uuid.uuid4().hex[:14]}"
+    benchmark_dir = (settings.uploads_path.parent / "benchmark_files" / case_id).resolve()
+    benchmark_root = (settings.uploads_path.parent / "benchmark_files").resolve()
+    if not benchmark_dir.is_relative_to(benchmark_root):
+        raise HTTPException(status_code=400, detail="金标文件目录无效")
+    benchmark_dir.mkdir(parents=True, exist_ok=True)
+    copied_files: List[str] = []
+    file_hashes = {}
+    total_size = 0
+    try:
+        for upload in files:
+            raw_name = Path(upload.filename or "file").name
+            extension = Path(raw_name).suffix.lower()
+            file_limit = settings.MAX_LEGACY_DOC_FILE_SIZE if extension == ".doc" else settings.MAX_UPLOAD_FILE_SIZE
+            safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", raw_name)[:180] or "file"
+            destination = (benchmark_dir / f"{uuid.uuid4().hex[:12]}_{safe_name}").resolve()
+            if destination.parent != benchmark_dir:
+                raise HTTPException(status_code=400, detail="金标文件名无效")
+            file_size = 0
+            with destination.open("xb") as output:
+                while True:
+                    chunk = await upload.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    file_size += len(chunk)
+                    total_size += len(chunk)
+                    if file_size > file_limit:
+                        raise HTTPException(status_code=413, detail=f"单文件 {raw_name} 超过大小限制")
+                    if total_size > settings.MAX_UPLOAD_TOTAL_SIZE:
+                        raise HTTPException(status_code=413, detail="上传文件总大小超过限制")
+                    output.write(chunk)
+            copied_files.append(str(destination))
+            file_hashes[destination.name] = _sha256_file(destination)
+    finally:
+        for upload in files:
+            await upload.close()
+
+    case = BenchmarkCase(
+        id=case_id,
+        feedback_id=None,
+        doc_type=doc_type.strip() or "GENERAL",
+        dataset_role=dataset_role,
+        title=title.strip(),
+        input_text=title.strip(),
+        raw_file_path=copied_files[0],
+        source_files=copied_files,
+        source_hashes=file_hashes,
+        ground_truth=ground_truth,
+        weight=weight,
+        is_active=False,
+        verification_status="DRAFT",
+    )
+    db.add(case)
+    await db.commit()
+    return {
+        "code": 0,
+        "message": "完整金标已导入为草稿，请人工核对后确认启用",
+        "data": {"id": case.id, "verification_status": case.verification_status},
+    }
+
+
+@router.get("/benchmarks/template", summary="获取完整金标 JSON 空白模板")
+async def get_benchmark_template():
+    return {"code": 0, "data": CargoV3Output().model_dump()}
+
 
 @router.get("/benchmarks", summary="金标评测集列表")
 async def list_benchmarks(db: AsyncSession = Depends(get_db)):
@@ -751,6 +859,11 @@ async def list_benchmarks(db: AsyncSession = Depends(get_db)):
         "source_files": [Path(path).name for path in (case.source_files or [])],
         "source_hashes": case.source_hashes or {},
         "ground_truth": case.ground_truth or {},
+        "is_complete": not complete_benchmark_errors(case.ground_truth or {}),
+        "field_count": len(set((case.ground_truth or {}).keys())),
+        "required_field_count": 57,
+        "completeness_errors": complete_benchmark_errors(case.ground_truth or {})[:10],
+        "source_type": "FEEDBACK" if case.feedback_id else "MANUAL",
         "weight": case.weight,
         "is_active": case.is_active,
         "verification_status": case.verification_status or "VERIFIED",
@@ -763,6 +876,7 @@ async def list_benchmarks(db: AsyncSession = Depends(get_db)):
     return {"code": 0, "data": data, "meta": {
         "training_count": sum(1 for case in cases if (case.dataset_role or "TRAIN") == "TRAIN"),
         "holdout_count": sum(1 for case in cases if case.dataset_role == "HOLDOUT"),
+        "complete_count": sum(1 for case in cases if not complete_benchmark_errors(case.ground_truth or {})),
     }}
 
 
@@ -805,19 +919,34 @@ async def update_benchmark(
         case.doc_type = payload.doc_type
     if payload.dataset_role is not None:
         case.dataset_role = payload.dataset_role
+    ground_truth_changed = payload.ground_truth is not None and payload.ground_truth != (case.ground_truth or {})
     if payload.ground_truth is not None:
         case.ground_truth = payload.ground_truth
+    if ground_truth_changed:
+        case.verification_status = "DRAFT"
+        case.verified_by = None
+        case.verified_at = None
+        case.is_active = False
     if payload.weight is not None:
         case.weight = payload.weight
     if payload.is_active is not None:
-        if payload.is_active and case.verification_status != "VERIFIED":
+        if ground_truth_changed:
+            case.is_active = False
+        elif payload.is_active and case.verification_status != "VERIFIED":
             raise HTTPException(status_code=409, detail="金标必须先完成人工确认才能启用")
-        case.is_active = payload.is_active
+        else:
+            case.is_active = payload.is_active
     if payload.verification_status is not None:
         case.verification_status = payload.verification_status
         if payload.verification_status == "VERIFIED":
             if not case.ground_truth:
                 raise HTTPException(status_code=409, detail="标准答案为空，不能确认金标")
+            completeness_errors = complete_benchmark_errors(case.ground_truth)
+            if completeness_errors:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"message": "标准答案不是完整 57 字段 JSON", "errors": completeness_errors[:10]},
+                )
             case.verified_by = "admin"
             case.verified_at = utc_now()
             case.is_active = True
@@ -874,7 +1003,9 @@ async def evaluate_single_benchmark(case_id: str, db: AsyncSession = Depends(get
         raise HTTPException(status_code=409, detail="该案例当前未启用，不能运行回归")
     if case.dataset_role == "HOLDOUT":
         raise HTTPException(status_code=409, detail="保密测试集不能单案例反复测试，只能参加完整发布门禁")
-    result = await EvaluationService.run_benchmark_evaluation(db, benchmark_ids=[case_id])
+    result = await EvaluationService.run_benchmark_evaluation(
+        db, benchmark_ids=[case_id], require_complete=True
+    )
     return {"code": 0, "message": "单案例回归完成", "data": result}
 
 @router.post("/evaluation/run", summary="一键执行全量金标回归评测")
@@ -1739,6 +1870,7 @@ async def _run_regression_job(job_id: str) -> None:
                     progress_callback=progress,
                     cancel_check=cancel_check,
                     stage_callback=stage_progress,
+                    require_complete=True,
                 )
             else:
                 result = await _run_layered_evaluation(
@@ -1783,6 +1915,7 @@ async def _run_regression_job(job_id: str) -> None:
                 stage_callback=stage_progress,
                 prepared_payload_cache=prepared_payload_cache,
                 evaluation_label="生产版本 · 优化集",
+                require_complete=True,
             )
             baseline_holdout = await EvaluationService.run_benchmark_evaluation(
                 db, prompt_template=active.content, prompt_version_id=active.id,
@@ -1790,6 +1923,7 @@ async def _run_regression_job(job_id: str) -> None:
                 stage_callback=stage_progress,
                 prepared_payload_cache=prepared_payload_cache,
                 evaluation_label="生产版本 · 保密集",
+                require_complete=True,
             )
             await AdminJobService.update(job_id, phase="CANDIDATE_EVALUATION", progress_current=0, progress_percent=0)
             candidate_train = await EvaluationService.run_benchmark_evaluation(
@@ -1802,6 +1936,7 @@ async def _run_regression_job(job_id: str) -> None:
                 stage_callback=stage_progress,
                 prepared_payload_cache=prepared_payload_cache,
                 evaluation_label="候选版本 · 优化集",
+                require_complete=True,
             )
             candidate_holdout = await EvaluationService.run_benchmark_evaluation(
                 db, prompt_template=item.content, prompt_version_id=item.id,
@@ -1809,6 +1944,7 @@ async def _run_regression_job(job_id: str) -> None:
                 stage_callback=stage_progress,
                 prepared_payload_cache=prepared_payload_cache,
                 evaluation_label="候选版本 · 保密集",
+                require_complete=True,
             )
             baseline = _layered_evaluation_result(baseline_train, baseline_holdout)
             candidate = _layered_evaluation_result(candidate_train, candidate_holdout)
@@ -1847,6 +1983,71 @@ async def _run_regression_job(job_id: str) -> None:
                 "gate_checks": gate_checks,
                 "gate_reasons": [check["detail"] for check in gate_checks if not check["passed"]],
             }
+        elif job_type == "PROMPT_SINGLE_EVALUATION":
+            item = (await db.execute(
+                select(PromptVersion).where(PromptVersion.id == payload.get("prompt_id"))
+            )).scalar_one_or_none()
+            case = (await db.execute(
+                select(BenchmarkCase).where(BenchmarkCase.id == payload.get("benchmark_id"))
+            )).scalar_one_or_none()
+            if not item:
+                raise ValueError("提示词候选不存在")
+            if not case:
+                raise ValueError("金标案例不存在")
+            if case.dataset_role != "TRAIN":
+                raise ValueError("保密测试集不能用于候选单案例调试")
+            if case.verification_status != "VERIFIED" or not case.is_active:
+                raise ValueError("案例必须已人工确认且启用")
+            if complete_benchmark_errors(case.ground_truth or {}):
+                raise ValueError("案例标准答案不是完整 57 字段 JSON")
+
+            prepared_payload_cache = {}
+            candidate = await EvaluationService.run_benchmark_evaluation(
+                db,
+                prompt_template=item.content,
+                prompt_version_id=item.id,
+                benchmark_ids=[case.id],
+                progress_callback=progress,
+                cancel_check=cancel_check,
+                stage_callback=stage_progress,
+                prepared_payload_cache=prepared_payload_cache,
+                evaluation_label="候选版本 · 单案例",
+                require_complete=True,
+            )
+            result = {
+                **candidate,
+                "single_case": True,
+                "candidate_prompt_id": item.id,
+                "candidate_version_tag": item.version_tag,
+                "compare_with_active": bool(payload.get("compare_with_active")),
+            }
+            if payload.get("compare_with_active"):
+                active = await _ensure_prompt_seed(db)
+                baseline = await EvaluationService.run_benchmark_evaluation(
+                    db,
+                    prompt_template=active.content,
+                    prompt_version_id=active.id,
+                    benchmark_ids=[case.id],
+                    progress_callback=progress,
+                    cancel_check=cancel_check,
+                    stage_callback=stage_progress,
+                    prepared_payload_cache=prepared_payload_cache,
+                    evaluation_label="生产版本 · 单案例",
+                    require_complete=True,
+                )
+                comparison = build_ab_comparison(baseline, candidate)
+                result.update({
+                    "baseline": baseline,
+                    "candidate": candidate,
+                    "active_prompt_id": active.id,
+                    "active_version_tag": active.version_tag,
+                    "ab_comparison": comparison,
+                    "accuracy_delta": round(
+                        candidate.get("overall_accuracy_percent", 0)
+                        - baseline.get("overall_accuracy_percent", 0),
+                        1,
+                    ),
+                })
         elif job_type == "PROMPT_QUICK_EVALUATION":
             item = (await db.execute(select(PromptVersion).where(PromptVersion.id == payload.get("prompt_id")))).scalar_one_or_none()
             if not item:
@@ -1858,6 +2059,7 @@ async def _run_regression_job(job_id: str) -> None:
                 db, prompt_template=item.content, prompt_version_id=item.id,
                 benchmark_ids=benchmark_ids, progress_callback=progress, cancel_check=cancel_check,
                 stage_callback=stage_progress,
+                require_complete=True,
             )
             result.update({
                 "quick_regression": True,
@@ -1922,7 +2124,63 @@ async def create_few_shot_evaluation_job(fs_id: str, db: AsyncSession = Depends(
 
 @router.post("/jobs/prompt-evaluation/{prompt_id}", summary="后台运行提示词 A/B 回归")
 async def create_prompt_evaluation_job(prompt_id: str, db: AsyncSession = Depends(get_db)):
-    return await _create_regression_job(db, "PROMPT_EVALUATION", {"prompt_id": prompt_id}, prompt_id)
+    cases = (
+        await db.execute(
+            select(BenchmarkCase).where(
+                BenchmarkCase.is_active.is_(True),
+                BenchmarkCase.verification_status == "VERIFIED",
+            ).order_by(BenchmarkCase.id.asc())
+        )
+    ).scalars().all()
+    snapshot = [
+        f"{case.id}:{case.updated_at.isoformat()}"
+        for case in cases
+        if not complete_benchmark_errors(case.ground_truth or {})
+    ]
+    return await _create_regression_job(
+        db,
+        "PROMPT_EVALUATION",
+        {"prompt_id": prompt_id, "benchmark_snapshot": snapshot},
+        prompt_id,
+    )
+
+
+@router.post(
+    "/jobs/prompt-single-evaluation/{prompt_id}/{case_id}",
+    summary="使用指定候选提示词运行一个优化集金标",
+)
+async def create_prompt_single_evaluation_job(
+    prompt_id: str,
+    case_id: str,
+    compare_with_active: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+):
+    item = (await db.execute(select(PromptVersion).where(PromptVersion.id == prompt_id))).scalar_one_or_none()
+    case = (await db.execute(select(BenchmarkCase).where(BenchmarkCase.id == case_id))).scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="提示词候选不存在")
+    if not case:
+        raise HTTPException(status_code=404, detail="金标案例不存在")
+    if case.dataset_role != "TRAIN":
+        raise HTTPException(status_code=409, detail="保密测试集不能用于候选单案例调试")
+    if case.verification_status != "VERIFIED" or not case.is_active:
+        raise HTTPException(status_code=409, detail="案例必须已人工确认且启用")
+    completeness_errors = complete_benchmark_errors(case.ground_truth or {})
+    if completeness_errors:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": "案例不是完整金标", "errors": completeness_errors[:10]},
+        )
+    return await _create_regression_job(
+        db,
+        "PROMPT_SINGLE_EVALUATION",
+        {
+            "prompt_id": prompt_id,
+            "benchmark_id": case_id,
+            "compare_with_active": compare_with_active,
+        },
+        prompt_id,
+    )
 
 
 @router.post("/jobs/prompt-quick-evaluation/{prompt_id}", summary="快速回归上一轮失败案例")
@@ -2145,6 +2403,93 @@ async def activate_prompt_version(prompt_id: str, db: AsyncSession = Depends(get
     return {"code": 0, "message": f"提示词 {item.version_tag} 已启用", "data": _prompt_payload(item)}
 
 
+@router.post("/prompts/{prompt_id}/publish", summary="发布并启用已通过完整 A/B 回归的提示词")
+async def publish_prompt_version(
+    prompt_id: str,
+    payload: SystemVersionReleaseRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    item = (await db.execute(select(PromptVersion).where(PromptVersion.id == prompt_id))).scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="提示词版本不存在")
+    if not payload.evaluation_job_id:
+        raise HTTPException(status_code=409, detail="发布必须绑定当前候选的完整 A/B 回归任务")
+    evaluation_job = (
+        await db.execute(select(AdminJob).where(AdminJob.id == payload.evaluation_job_id))
+    ).scalar_one_or_none()
+    if (
+        not evaluation_job
+        or evaluation_job.job_type != "PROMPT_EVALUATION"
+        or evaluation_job.status != "COMPLETED"
+        or (evaluation_job.input_payload or {}).get("prompt_id") != prompt_id
+    ):
+        raise HTTPException(status_code=409, detail="发布任务与当前候选提示词不匹配")
+    evaluation_result = evaluation_job.result or {}
+    if not evaluation_result.get("no_regression") or not evaluation_result.get("can_release"):
+        raise HTTPException(status_code=409, detail="当前候选尚未通过完整 A/B 发布门禁")
+
+    current_cases = (
+        await db.execute(
+            select(BenchmarkCase).where(
+                BenchmarkCase.is_active.is_(True),
+                BenchmarkCase.verification_status == "VERIFIED",
+            ).order_by(BenchmarkCase.id.asc())
+        )
+    ).scalars().all()
+    current_snapshot = [
+        f"{case.id}:{case.updated_at.isoformat()}"
+        for case in current_cases
+        if not complete_benchmark_errors(case.ground_truth or {})
+    ]
+    if (evaluation_job.input_payload or {}).get("benchmark_snapshot") != current_snapshot:
+        raise HTTPException(status_code=409, detail="金标评测集在 A/B 回归后发生变化，请重新评测")
+    if item.status != "VALIDATED":
+        raise HTTPException(status_code=409, detail="候选状态不是 VALIDATED，不能发布")
+    run = None
+    if item.evaluation_run_id:
+        run = (
+            await db.execute(select(EvaluationRun).where(EvaluationRun.id == item.evaluation_run_id))
+        ).scalar_one_or_none()
+    if not run or not run.can_release or run.prompt_version_id != item.id:
+        raise HTTPException(status_code=409, detail="候选没有绑定可发布的评测记录")
+    existing_version = (
+        await db.execute(select(SystemVersion).where(SystemVersion.version_tag == payload.version_tag))
+    ).scalar_one_or_none()
+    if existing_version:
+        raise HTTPException(status_code=400, detail=f"版本号 {payload.version_tag} 已存在，请更换")
+
+    await PromptService.activate(db, item)
+    item.activated_at = utc_now()
+    resolved_count = 0
+    if payload.mark_accepted_as_resolved:
+        update_result = await db.execute(
+            update(TaskFeedback)
+            .where(TaskFeedback.status == "ACCEPTED")
+            .values(status="RESOLVED", resolved_version=payload.version_tag)
+        )
+        resolved_count = update_result.rowcount
+    version = SystemVersion(
+        version_tag=payload.version_tag,
+        benchmark_score=f"{evaluation_result.get('overall_accuracy_percent', 0.0)}%",
+        total_test_cases=evaluation_result.get("total_cases", 0),
+        passed_test_cases=evaluation_result.get("passed_cases", 0),
+        changelog=payload.changelog or f"启用提示词 {item.version_tag}",
+        resolved_feedbacks_count=resolved_count,
+        released_by="admin",
+    )
+    db.add(version)
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="版本发布发生并发冲突，请刷新后重试") from exc
+    return {
+        "code": 0,
+        "message": f"提示词 {item.version_tag} 已发布并启用",
+        "data": {"prompt": _prompt_payload(item), "version_tag": version.version_tag},
+    }
+
+
 @router.get("/evaluation/runs", summary="查询回归运行历史")
 async def list_evaluation_runs(db: AsyncSession = Depends(get_db)):
     items = (
@@ -2181,6 +2526,8 @@ async def export_benchmarks_jsonl(db: AsyncSession = Depends(get_db)):
     ).scalars().all()
     lines = []
     for case in cases:
+        if complete_benchmark_errors(case.ground_truth or {}):
+            continue
         lines.append(json.dumps({
             "id": case.id,
             "feedback_id": case.feedback_id,

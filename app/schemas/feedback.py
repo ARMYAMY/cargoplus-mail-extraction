@@ -3,9 +3,65 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from app.schemas.cargo_v3 import CargoV3Output, ContainerInfoItem
 
 
 MAX_FEW_SHOT_OUTPUT_BYTES = 64 * 1024
+
+
+def complete_benchmark_errors(value: Any) -> List[str]:
+    """Return structural errors for a complete 57-field Cargo V3 gold answer."""
+    if not isinstance(value, dict):
+        return ["标准答案必须是 JSON 对象"]
+    expected_fields = set(CargoV3Output.model_fields)
+    actual_fields = set(value)
+    errors: List[str] = []
+    missing = sorted(expected_fields - actual_fields)
+    extra = sorted(actual_fields - expected_fields)
+    if missing:
+        errors.append(f"缺少字段: {', '.join(missing)}")
+    if extra:
+        errors.append(f"包含未知字段: {', '.join(extra)}")
+
+    containers = value.get("ContainerInfo")
+    if "ContainerInfo" in value and not isinstance(containers, list):
+        errors.append("ContainerInfo 必须是数组")
+    elif isinstance(containers, list):
+        expected_container_fields = set(ContainerInfoItem.model_fields)
+        for index, item in enumerate(containers):
+            if not isinstance(item, dict):
+                errors.append(f"ContainerInfo[{index}] 必须是对象")
+                continue
+            item_fields = set(item)
+            item_missing = sorted(expected_container_fields - item_fields)
+            item_extra = sorted(item_fields - expected_container_fields)
+            if item_missing:
+                errors.append(
+                    f"ContainerInfo[{index}] 缺少字段: {', '.join(item_missing)}"
+                )
+            if item_extra:
+                errors.append(
+                    f"ContainerInfo[{index}] 包含未知字段: {', '.join(item_extra)}"
+                )
+    if errors:
+        return errors
+    try:
+        CargoV3Output.model_validate(value)
+    except Exception as exc:
+        errors.append(f"字段类型不符合 Cargo V3: {exc}")
+    return errors
+
+
+def validate_complete_benchmark(value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if value is None:
+        return value
+    errors = complete_benchmark_errors(value)
+    if errors:
+        raise ValueError("；".join(errors[:5]))
+    size = len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+    if size > MAX_FEW_SHOT_OUTPUT_BYTES:
+        raise ValueError("标准答案不能超过 64 KiB")
+    return value
 
 
 def _validate_few_shot_output(value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -130,6 +186,8 @@ class BenchmarkUpdateRequest(BaseModel):
     is_active: Optional[bool] = None
     verification_status: Optional[Literal["DRAFT", "VERIFIED"]] = None
 
+    # 草稿编辑阶段允许暂存未完成内容；只有“人工确认并启用”时才强制校验
+    # 完整 57 字段，方便用户逐步修订历史金标。
     _validate_ground_truth = field_validator("ground_truth")(
         _validate_few_shot_output
     )

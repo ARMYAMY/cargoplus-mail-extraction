@@ -135,9 +135,11 @@ Authorization: Bearer <ADMIN_SESSION_TOKEN>
 - **Endpoint**: `POST /api/v1/extract/async/upload`
 - **Content-Type**: `multipart/form-data`
 - **表单字段**:
-  - `files`: 文件列表（支持 `.eml`, `.pdf`, `.xlsx`, `.docx`, 图片，最多 10 个文件）
+  - `files`: 文件列表（支持 `.eml`, `.pdf`, `.xlsx`, `.xls`, `.docx`, `.doc`, 图片，最多 10 个文件）
   - `mail_subject`: (可选) 邮件主题
   - `callback_url`: (可选) Webhook 回调地址
+
+旧版 `.xls` 文件按工作表单元格内容读取，不处理图片、图表、宏、批注和透视表。密码保护、文件损坏或伪装扩展名的文件会使异步任务进入 `FAILED` 状态，并在任务错误信息中返回明确的“Excel解析失败”原因，不会继续调用模型猜测内容。
 
 ---
 

@@ -12,6 +12,7 @@ from app.database import AsyncSessionLocal
 from app.config import settings
 from app.models.feedback import BenchmarkCase, EvaluationRun
 from app.schemas.task import SkillV3InputPayload
+from app.schemas.feedback import complete_benchmark_errors
 
 logger = logging.getLogger(__name__)
 
@@ -296,6 +297,7 @@ class EvaluationService:
         stage_callback: Optional[Callable[[str, Dict[str, Any]], Awaitable[None]]] = None,
         prepared_payload_cache: Optional[Dict[str, SkillV3InputPayload]] = None,
         evaluation_label: str = "",
+        require_complete: bool = False,
     ) -> Dict[str, Any]:
         """
         Runs automated regression benchmark test suite against all active BenchmarkCases.
@@ -315,7 +317,15 @@ class EvaluationService:
             stmt = stmt.where(BenchmarkCase.dataset_role == dataset_role)
         stmt = stmt.order_by(BenchmarkCase.created_at.asc())
         res = await db.execute(stmt)
-        cases = res.scalars().all()
+        selected_cases = res.scalars().all()
+        cases = (
+            [case for case in selected_cases if not complete_benchmark_errors(case.ground_truth or {})]
+            if require_complete
+            else selected_cases
+        )
+        skipped_incomplete = len(selected_cases) - len(cases)
+        if skipped_incomplete:
+            logger.warning("Skipped %s incomplete benchmark case(s)", skipped_incomplete)
 
         if not cases:
             # Generate default sample cases if none exist

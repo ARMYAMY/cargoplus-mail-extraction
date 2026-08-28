@@ -2878,6 +2878,7 @@ MEAS: 68.000 CBM`;
       loadPromptVersions();
       loadPromptFeedbackOptions();
       loadActiveAdminJobs();
+      loadBenchmarks();
     } else if (subName === 'benchmark') {
       if (btnBenchmark) btnBenchmark.classList.add('active');
       if (viewBenchmark) viewBenchmark.style.display = 'block';
@@ -2896,15 +2897,15 @@ MEAS: 68.000 CBM`;
     const role = document.getElementById('benchmark-role-filter')?.value || '';
     const rows = benchmarkCases.filter(item => !role || (item.dataset_role || 'TRAIN') === role);
     tbody.innerHTML = rows.length ? rows.map(item => {
-      const latest = item.latest_result || {}, isHoldout=(item.dataset_role||'TRAIN')==='HOLDOUT';
+      const isHoldout=(item.dataset_role||'TRAIN')==='HOLDOUT';
       return `<tr>
         <td><strong>${escapeHtml(item.title)}</strong><div class="font-mono text-muted" style="font-size:.7rem;">${escapeHtml(item.id)}</div></td>
+        <td>${item.source_type==='MANUAL'?'<span class="badge badge-info">人工导入</span>':'<span class="badge badge-secondary">客户反馈</span>'}</td>
         <td>${isHoldout?'<span class="badge badge-warning">🔒 保密测试集</span>':'<span class="badge badge-info">优化集</span>'}</td>
         <td><span class="badge badge-info">${escapeHtml(item.doc_type)}</span></td>
         <td>${escapeHtml((item.source_files || []).join(', ') || '仅文本')}</td>
-        <td>${item.weight}</td><td>${item.verification_status !== 'VERIFIED' ? '<span class="badge badge-warning">待人工确认</span>' : (item.is_active ? '<span class="badge badge-success">已确认·启用</span>' : '<span class="badge badge-secondary">已确认·停用</span>')}</td>
-        <td>${latest.accuracy_percent == null ? '-' : `${latest.accuracy_percent}%`}</td>
-        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${isHoldout?'🔒 保密明细不用于 AI 优化':escapeHtml(latest.error || (latest.diff_keys || []).join(', ') || '-')}</td>
+        <td>${item.is_complete?'<span class="badge badge-success">57/57 完整</span>':`<span class="badge badge-danger">${item.field_count||0}/57 不完整</span>`}</td>
+        <td>${item.weight}</td><td>${!item.is_complete?'<span class="badge badge-danger">不可参与评测</span>':(item.verification_status !== 'VERIFIED' ? '<span class="badge badge-warning">待人工确认</span>' : (item.is_active ? '<span class="badge badge-success">已确认·启用</span>' : '<span class="badge badge-secondary">已确认·停用</span>'))}</td>
         <td><button class="btn btn-xs btn-secondary" onclick="openBenchmarkDetail('${item.id}')">查看/编辑</button></td>
       </tr>`;
     }).join('') : '<tr><td colspan="9" class="text-center text-muted py-8">当前筛选下暂无金标案例</td></tr>';
@@ -2920,14 +2921,13 @@ MEAS: 68.000 CBM`;
       document.getElementById('benchmark-train-count').textContent=body.meta?.training_count??benchmarkCases.filter(item=>(item.dataset_role||'TRAIN')==='TRAIN').length;
       document.getElementById('benchmark-holdout-count').textContent=body.meta?.holdout_count??benchmarkCases.filter(item=>item.dataset_role==='HOLDOUT').length;
       renderBenchmarkRows();
+      renderPromptSingleBenchmarkOptions();
     } catch (err) { tbody.innerHTML = `<tr><td colspan="9" class="text-center text-danger py-8">${escapeHtml(err.message)}</td></tr>`; }
   };
 
   function updateBenchmarkRoleNote() {
     const isHoldout=document.getElementById('bm-dataset-role').value==='HOLDOUT';
     document.getElementById('bm-role-note').textContent=isHoldout?'🔒 保密测试集不能单案例试题、不能导出标准答案，也不会进入 AI 失败证据；只参加完整发布门禁。':'优化集可用于 AI 诊断、快速回归和基于失败继续优化。';
-    const item=benchmarkCases.find(row=>row.id===document.getElementById('bm-id').value);
-    document.getElementById('btn-run-single-benchmark').disabled=isHoldout||item?.verification_status!=='VERIFIED'||!item?.is_active;
   }
 
   window.openBenchmarkDetail = function(id) {
@@ -2944,19 +2944,19 @@ MEAS: 68.000 CBM`;
     status.className = `badge ${item.verification_status === 'VERIFIED' ? 'badge-success' : 'badge-warning'}`;
     status.textContent = item.verification_status === 'VERIFIED' ? '已人工确认' : '待人工确认';
     document.getElementById('bm-verified-meta').textContent = item.verified_at ? `确认人：${item.verified_by || 'admin'} · ${new Date(item.verified_at).toLocaleString()}` : '不会进入金标导出与回归';
-    document.getElementById('btn-run-single-benchmark').disabled = item.verification_status !== 'VERIFIED' || !item.is_active || item.dataset_role === 'HOLDOUT';
     document.getElementById('btn-verify-benchmark').style.display = item.verification_status === 'VERIFIED' ? 'none' : '';
+    document.getElementById('btn-verify-benchmark').disabled = false;
     document.getElementById('bm-input-text').textContent = item.input_text || '无文本摘要';
     document.getElementById('bm-ground-truth').value = JSON.stringify(item.ground_truth || {}, null, 2);
+    const completeness=document.getElementById('bm-completeness');
+    completeness.style.color=item.is_complete?'#34d399':'#f87171';
+    completeness.textContent=item.is_complete?'✓ 完整 57 字段，可在人工确认后参与评测':`✗ 当前 ${item.field_count||0}/57 个顶层字段：${(item.completeness_errors||[]).join('；')}`;
     const files = document.getElementById('bm-files'); files.replaceChildren();
     (item.source_files || []).forEach(name => {
       const button = document.createElement('button'); button.className='btn btn-xs btn-secondary'; button.textContent=name;
       button.onclick=() => downloadBenchmarkFile(item.id, name); files.appendChild(button);
     });
-    const latest = item.latest_result || {};
-    document.getElementById('bm-latest-summary').textContent = latest.run_id ? `运行 ${latest.run_id} · 准确率 ${latest.accuracy_percent}%${latest.error ? ` · ${latest.error}` : ''}` : '尚未运行回归';
-    const tbody = document.querySelector('#table-bm-diffs tbody');
-    tbody.innerHTML = (latest.field_diffs || []).map(diff => `<tr style="${diff.is_match ? '' : 'background:rgba(239,68,68,.12);'}"><td class="font-mono">${escapeHtml(diff.field)}</td><td><pre style="white-space:pre-wrap;">${escapeHtml(JSON.stringify(diff.expected))}</pre></td><td><pre style="white-space:pre-wrap;">${escapeHtml(JSON.stringify(diff.actual))}</pre></td><td>${diff.is_match ? '<span class="badge badge-success">正确</span>' : `<span class="badge badge-danger">错误${diff.is_critical ? '·关键' : ''}</span>`}</td></tr>`).join('') || '<tr><td colspan="4" class="text-muted">暂无逐字段结果，请运行一次回归。</td></tr>';
+    loadBenchmarkRevisions(item.id);
     document.getElementById('bm-dataset-role').onchange=updateBenchmarkRoleNote;
     updateBenchmarkRoleNote();
     openModal('modal-benchmark-detail');
@@ -2979,6 +2979,58 @@ MEAS: 68.000 CBM`;
     const res=await adminFetch(`/admin/benchmarks/${encodeURIComponent(id)}`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:document.getElementById('bm-title').value.trim(),doc_type:document.getElementById('bm-doc-type').value.trim(),dataset_role:document.getElementById('bm-dataset-role').value,weight:Number(document.getElementById('bm-weight').value),ground_truth:groundTruth,verification_status:'VERIFIED'})});
     const body=await res.json(); if(!res.ok) return showToast('error',typeof body.detail==='string'?body.detail:JSON.stringify(body.detail));
     showToast('success','标准答案已人工确认并启用，可进入导出与回归'); await loadBenchmarks(); openBenchmarkDetail(id);
+  };
+
+  window.openBenchmarkImportModal = async function() {
+    document.getElementById('bmi-title').value='';
+    document.getElementById('bmi-doc-type').value='GENERAL';
+    document.getElementById('bmi-role').value='TRAIN';
+    document.getElementById('bmi-weight').value='1';
+    document.getElementById('bmi-files').value='';
+    document.getElementById('bmi-ground-truth').value='正在加载 57 字段空白模板...';
+    openModal('modal-benchmark-import');
+    const res=await adminFetch('/admin/benchmarks/template');
+    const body=await res.json().catch(()=>({}));
+    document.getElementById('bmi-ground-truth').value=res.ok?JSON.stringify(body.data||{},null,2):'';
+    if(!res.ok)showToast('warning','空白模板加载失败，可手动粘贴完整 Cargo V3 JSON');
+  };
+
+  window.importBenchmark = async function() {
+    const title=document.getElementById('bmi-title').value.trim();
+    const files=Array.from(document.getElementById('bmi-files').files||[]);
+    const groundTruth=document.getElementById('bmi-ground-truth').value.trim();
+    if(!title)return showToast('warning','请输入案例名称');
+    if(!files.length)return showToast('warning','请至少上传一个原始文件');
+    try{JSON.parse(groundTruth);}catch(err){return showToast('error',`标准答案 JSON 无效：${err.message}`);}
+    const form=new FormData();
+    form.append('title',title);
+    form.append('doc_type',document.getElementById('bmi-doc-type').value.trim()||'GENERAL');
+    form.append('dataset_role',document.getElementById('bmi-role').value);
+    form.append('weight',document.getElementById('bmi-weight').value||'1');
+    form.append('ground_truth_json',groundTruth);
+    files.forEach(file=>form.append('files',file));
+    const res=await adminFetch('/admin/benchmarks/import',{method:'POST',body:form});
+    const body=await res.json();
+    if(!res.ok)return showToast('error',typeof body.detail==='string'?body.detail:JSON.stringify(body.detail));
+    showToast('success',body.message);closeModal('modal-benchmark-import');await loadBenchmarks();
+  };
+
+  window.loadBenchmarkRevisions = async function(id) {
+    const panel=document.getElementById('bm-revisions');
+    panel.textContent='加载中...';
+    const res=await adminFetch(`/admin/benchmarks/${encodeURIComponent(id)}/revisions`);
+    const body=await res.json();
+    if(!res.ok){panel.textContent=body.detail||`HTTP ${res.status}`;return;}
+    panel.innerHTML=(body.data||[]).map(row=>`<div style="padding:7px 0;border-bottom:1px solid var(--border-color);">${escapeHtml(formatDate(row.created_at))} · ${escapeHtml(row.changed_by||'admin')}<details><summary>查看快照</summary><pre style="white-space:pre-wrap;max-height:260px;overflow:auto;">${escapeHtml(JSON.stringify(row.snapshot||{},null,2))}</pre></details></div>`).join('')||'暂无修改历史';
+  };
+
+  window.renderPromptSingleBenchmarkOptions = function() {
+    const select=document.getElementById('prompt-single-benchmark');
+    if(!select)return;
+    const previous=select.value;
+    const eligible=benchmarkCases.filter(item=>item.dataset_role==='TRAIN'&&item.is_complete&&item.verification_status==='VERIFIED'&&item.is_active);
+    select.innerHTML='<option value="">请选择完整优化集案例</option>'+eligible.map(item=>`<option value="${escapeHtml(item.id)}">${escapeHtml(item.title)} · 权重 ${item.weight}</option>`).join('');
+    if(eligible.some(item=>item.id===previous))select.value=previous;
   };
 
   window.runSingleBenchmark = async function() {
@@ -3352,6 +3404,7 @@ MEAS: 68.000 CBM`;
     const job=body.data; currentAdminJobId=job.id; localStorage.setItem('cargoCurrentAdminJob',job.id);
     if(job.job_type==='PROMPT_GENERATION'||job.job_type==='PROMPT_REFINEMENT') return monitorPromptGenerationJob(job.id);
     if(job.job_type==='PROMPT_EVALUATION'&&job.status==='COMPLETED') { currentPromptEvaluationJobId=job.id; renderPromptABResult(job.result||{},job); }
+    if(job.job_type==='PROMPT_SINGLE_EVALUATION'&&job.status==='COMPLETED') renderPromptSingleResult(job.result||{});
     const target=document.getElementById(`job-detail-${job.id}`);
     if(target) target.innerHTML=job.status==='COMPLETED' ? `用例 ${job.result?.total_cases||0} · 准确率 ${job.result?.overall_accuracy_percent??'-'}% · 核心退化 ${job.result?.critical_regressions_count||0}` : (job.error_code ? escapeHtml(jobErrorText(job)) : `当前阶段：${escapeHtml(job.phase)}`);
     if(job.job_type==='BENCHMARK_EVALUATION'&&job.status==='COMPLETED'&&!(job.input_payload?.benchmark_ids||[]).length) {lastSuccessfulBenchmarkJobId=job.id;localStorage.setItem('cargoReleaseBenchmarkJob',job.id);renderBenchmarkJobResult(job.result||{});}
@@ -3439,6 +3492,33 @@ MEAS: 68.000 CBM`;
     const id=document.getElementById('prompt-selected-id').value;if(!id)return showToast('warning','请先选择 V2/V3 候选');
     setPromptWorkflowStep('quick');
     try{await startTrackedJob(`/admin/jobs/prompt-quick-evaluation/${encodeURIComponent(id)}`,data=>{showToast(data.all_failed_cases_fixed?'success':'warning',`${data.notice} 当前 ${data.passed_cases||0}/${data.total_cases||0} 个案例通过。`);renderBenchmarkJobResult(data);});showToast('info','失败案例快速回归已启动');}catch(err){showToast('error',`快速回归失败：${err.message}`);}
+  };
+
+  function renderPromptSingleResult(data) {
+    const panel=document.getElementById('prompt-single-result');
+    if(!panel)return;
+    panel.style.display='block';
+    const candidateCase=(data.candidate?.case_results||data.case_results||[])[0]||{};
+    if(data.compare_with_active&&data.ab_comparison){
+      const compared=(data.ab_comparison.cases||[])[0]||{};
+      const changed=(compared.field_comparisons||[]).filter(row=>row.classification!=='UNCHANGED_CORRECT');
+      panel.innerHTML=`<strong>候选单案例 A/B</strong><div class="prompt-section-note" style="margin-top:5px;">生产 ${escapeHtml(data.active_version_tag||data.active_prompt_id||'-')} · 候选 ${escapeHtml(data.candidate_version_tag||data.candidate_prompt_id||'-')} · ${compared.baseline_accuracy_percent||0}% → ${compared.candidate_accuracy_percent||0}%</div><div style="overflow:auto;margin-top:8px;"><table class="data-table"><thead><tr><th>字段</th><th>金标</th><th>生产</th><th>候选</th><th>结论</th></tr></thead><tbody>${changed.map(row=>`<tr><td>${escapeHtml(row.field||'')}</td><td>${prettyValue(row.expected)}</td><td>${prettyValue(row.baseline_actual)}</td><td>${prettyValue(row.candidate_actual)}</td><td>${escapeHtml(row.classification||'')}</td></tr>`).join('')||'<tr><td colspan="5">候选与生产均符合完整金标</td></tr>'}</tbody></table></div>`;
+    }else{
+      const failed=(candidateCase.field_diffs||[]).filter(row=>!row.is_match);
+      panel.innerHTML=`<strong>候选单案例结果：${candidateCase.accuracy_percent??0}%</strong><div class="prompt-section-note" style="margin-top:5px;">候选 ${escapeHtml(data.candidate_version_tag||data.candidate_prompt_id||'-')} · ${escapeHtml(candidateCase.title||candidateCase.case_id||'')}</div><div style="overflow:auto;margin-top:8px;"><table class="data-table"><thead><tr><th>字段</th><th>金标</th><th>候选结果</th><th>判定</th></tr></thead><tbody>${failed.map(row=>`<tr><td>${escapeHtml(row.field||'')}</td><td>${prettyValue(row.expected)}</td><td>${prettyValue(row.actual)}</td><td><span class="badge badge-danger">错误${row.is_critical?'·关键':''}</span></td></tr>`).join('')||'<tr><td colspan="4"><span class="badge badge-success">全部字段正确</span></td></tr>'}</tbody></table></div>`;
+    }
+  }
+
+  window.evaluatePromptSingleCase = async function() {
+    const promptId=document.getElementById('prompt-selected-id').value;
+    const caseId=document.getElementById('prompt-single-benchmark').value;
+    const compare=document.getElementById('prompt-single-compare').checked;
+    if(!promptId)return showToast('warning','请先选择候选提示词');
+    if(!caseId)return showToast('warning','请选择完整优化集案例');
+    try{
+      await startTrackedJob(`/admin/jobs/prompt-single-evaluation/${encodeURIComponent(promptId)}/${encodeURIComponent(caseId)}?compare_with_active=${compare?'true':'false'}`,data=>{renderPromptSingleResult(data);showToast(data.failed_cases?'warning':'success',`候选单案例准确率 ${data.overall_accuracy_percent??0}%`);});
+      showToast('info','候选单案例调试已启动');
+    }catch(err){showToast('error',`候选单案例启动失败：${err.message}`);}
   };
 
   window.evaluateSelectedPrompt = async function() {
@@ -3937,6 +4017,45 @@ MEAS: 68.000 CBM`;
     document.getElementById('vr-changelog').value = '优化大模型抽取规则，注入最新采纳的 Few-Shot 纠错样本，全量金标回归评测通过。';
     document.getElementById('vr-mark-resolved').checked = true;
     openModal('modal-version-release');
+  };
+
+  window.openPromptPublishModal = async function() {
+    const promptId=document.getElementById('prompt-selected-id').value;
+    const item=promptVersions.find(row=>row.id===promptId);
+    if(!item)return showToast('warning','请先选择候选提示词');
+    if(item.status!=='VALIDATED')return showToast('warning','当前候选尚未通过完整 A/B 回归');
+    if(!currentPromptEvaluationJobId)return showToast('warning','找不到当前候选的完整 A/B 任务，请重新运行完整回归');
+    const jobRes=await adminFetch(`/admin/jobs/${encodeURIComponent(currentPromptEvaluationJobId)}`);
+    const jobBody=await jobRes.json().catch(()=>({}));
+    const job=jobBody.data||{};
+    if(!jobRes.ok||job.job_type!=='PROMPT_EVALUATION'||job.status!=='COMPLETED'||job.input_payload?.prompt_id!==promptId||!job.result?.no_regression||!job.result?.can_release){
+      return showToast('warning','当前显示的完整 A/B 结果不属于这个候选，请重新运行完整回归');
+    }
+    const dateStr=new Date().toISOString().slice(0,10).replace(/-/g,'');
+    document.getElementById('vr-tag').value=`v4.${dateStr.slice(4)}`;
+    document.getElementById('vr-changelog').value=`发布并启用提示词 ${item.version_tag}，完整 A/B 回归通过。`;
+    document.getElementById('vr-mark-resolved').checked=true;
+    openModal('modal-version-release');
+  };
+
+  window.publishSelectedPrompt = async function() {
+    const promptId=document.getElementById('prompt-selected-id').value;
+    const versionTag=document.getElementById('vr-tag').value.trim();
+    if(!promptId)return showToast('warning','请先选择候选提示词');
+    if(!versionTag)return showToast('warning','请输入版本号');
+    const confirmed=await showConfirmModal({title:'发布并启用候选',message:'将归档当前生产提示词并立即启用该候选，确认继续吗？',confirmText:'确认发布',type:'warning'});
+    if(!confirmed)return;
+    const res=await adminFetch(`/admin/prompts/${encodeURIComponent(promptId)}/publish`,{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+        version_tag:versionTag,
+        changelog:document.getElementById('vr-changelog').value.trim(),
+        mark_accepted_as_resolved:document.getElementById('vr-mark-resolved').checked,
+        evaluation_job_id:currentPromptEvaluationJobId,
+      }),
+    });
+    const body=await res.json();
+    if(!res.ok)return showToast('error',typeof body.detail==='string'?body.detail:JSON.stringify(body.detail));
+    closeModal('modal-version-release');showToast('success',body.message);await loadPromptVersions();loadAdminVersions();loadAdminFeedbacks();
   };
 
   window.doReleaseVersion = async function() {
