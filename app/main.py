@@ -244,6 +244,10 @@ async def add_security_headers(request, call_next):
         )
     if request.url.path.startswith(("/api/", "/admin/")):
         response.headers.setdefault("Cache-Control", "no-store")
+    elif request.url.path in {"/", "/portal", "/reconciliation", "/login", "/register", "/manual", "/guide"}:
+        # HTML 必须每次向服务端确认版本；JS/CSS 通过查询参数做版本隔离。
+        # 否则浏览器可能组合“新版 HTML + 旧版 JS”，造成新按钮点击无响应。
+        response.headers.setdefault("Cache-Control", "no-cache")
     return response
 
 

@@ -13,7 +13,7 @@ HTML_TAG_RE = re.compile(r'<[^>]+>')
 MAX_EML_ATTACHMENTS = 10
 MAX_EML_ATTACHMENT_SIZE = 20 * 1024 * 1024
 SAFE_ATTACHMENT_EXTENSIONS = {
-    ".pdf", ".xlsx", ".docx", ".doc", ".jpg", ".jpeg", ".png", ".bmp",
+    ".pdf", ".xlsx", ".xls", ".docx", ".doc", ".jpg", ".jpeg", ".png", ".bmp",
     ".webp", ".tiff", ".txt", ".csv", ".json", ".md",
 }
 

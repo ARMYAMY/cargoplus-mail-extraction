@@ -27,6 +27,7 @@ data/*.sqlite3
 data/backups/
 data/migration_*.json
 data/uploads/
+data/benchmark_files/
 *.log
 deploy/.env.production
 deploy/secrets/*
@@ -38,6 +39,7 @@ deploy/cloud/.env
 deploy/cloud/Caddyfile.active
 deploy/cloud/secrets/
 reports/
+tmp/
 
 # IDE and operating-system metadata
 .idea/

@@ -3,7 +3,7 @@ import io
 import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
-from httpx import ASGITransport, AsyncClient, TimeoutException
+from httpx import ASGITransport, AsyncClient, ConnectError, TimeoutException
 from PIL import Image
 from sqlalchemy import select
 from app.config import settings
@@ -266,6 +266,18 @@ async def test_test_llm_connection_all_branches():
                 headers=headers,
             )
             assert res_err.status_code == 502
+
+        # 8. Network permission / connect failure -> actionable 502
+        with patch("app.api.admin.llm_config.httpx.AsyncClient", return_value=create_mock_ctx(side_effect=ConnectError("All connection attempts failed"))):
+            res_connect = await client.post(
+                "/admin/llm-config/test",
+                json={"base_url": "https://api.test.com", "api_key": "valid_key"},
+                headers=headers,
+            )
+            assert res_connect.status_code == 502
+            detail = res_connect.json()["detail"]
+            assert detail["code"] == 50202
+            assert "外网访问权限" in detail["message"]
 
 
 @pytest.mark.asyncio

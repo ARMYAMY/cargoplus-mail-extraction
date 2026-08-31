@@ -606,9 +606,9 @@ FREIGHT TERM: PREPAID`;
                 </div>
 
                 <div class="form-group">
-                  <label>上传邮件文件或附件文档 (支持 .eml, .pdf, .xlsx, .docx, .doc, 图片):</label>
+                  <label>上传邮件文件或附件文档 (支持 .eml, .pdf, .xlsx, .xls, .docx, .doc, 图片):</label>
                   <div class="file-dropzone" id="wb-dropzone">
-                    <input type="file" id="wb-file-input" multiple accept=".eml,.pdf,.xlsx,.docx,.doc,.jpg,.jpeg,.png,.bmp,.webp,.tiff,.txt,.csv" style="display:none;">
+                    <input type="file" id="wb-file-input" multiple accept=".eml,.pdf,.xlsx,.xls,.docx,.doc,.jpg,.jpeg,.png,.bmp,.webp,.tiff,.txt,.csv" style="display:none;">
                     <div class="dropzone-inner">
                       <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
                       <p>点击选择文件或将单证文件拖拽至此处</p>
@@ -820,10 +820,6 @@ FREIGHT TERM: PREPAID`;
             <button type="button" class="btn btn-secondary" id="btn-subtab-fb-benchmark" onclick="switchFeedbackSubTab('benchmark')">
               <span>金标评测集</span>
             </button>
-            <button type="button" class="btn btn-secondary" id="btn-subtab-fb-release" onclick="switchFeedbackSubTab('release')">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
-              <span>金标自动回归评测 & 发布</span>
-            </button>
             <button type="button" class="btn btn-secondary" id="btn-subtab-fb-prompt" onclick="switchFeedbackSubTab('prompt')">
               <span>模型辅助提示词实验室</span>
             </button>
@@ -1010,13 +1006,14 @@ FREIGHT TERM: PREPAID`;
                 <span class="badge badge-info">优化集 <strong id="benchmark-train-count">0</strong></span>
                 <span class="badge badge-warning">保密集 <strong id="benchmark-holdout-count">0</strong></span>
                 <select id="benchmark-role-filter" class="form-control" style="width:auto;min-width:130px;" onchange="renderBenchmarkRows()"><option value="">全部用途</option><option value="TRAIN">优化集</option><option value="HOLDOUT">保密测试集</option></select>
+                <button class="btn btn-primary" onclick="openBenchmarkImportModal()">人工导入完整金标</button>
                 <button class="btn btn-secondary" onclick="loadBenchmarks()">刷新</button>
               </div>
             </div>
           </div>
           <div class="card"><div class="card-body" style="padding:0;"><div class="table-responsive">
             <table class="data-table" id="table-benchmarks"><thead><tr>
-              <th>案例</th><th>数据用途</th><th>单证类型</th><th>原始文件</th><th>权重</th><th>状态</th><th>最近准确率</th><th>最近错误</th><th>操作</th>
+              <th>案例</th><th>来源</th><th>数据用途</th><th>单证类型</th><th>原始文件</th><th>字段完整性</th><th>权重</th><th>状态</th><th>操作</th>
             </tr></thead><tbody><tr><td colspan="9" class="text-center text-muted py-8">正在加载金标案例...</td></tr></tbody></table>
           </div></div></div>
         </div>
@@ -1096,11 +1093,18 @@ FREIGHT TERM: PREPAID`;
                 </details>
                 <details class="prompt-json-details"><summary>查看相对生产版本的文本差异</summary><pre id="prompt-diff-view" class="prompt-stream-console"></pre></details>
                 <input type="hidden" id="prompt-selected-id">
+                <div style="display:grid;grid-template-columns:minmax(220px,1fr) auto auto;gap:10px;align-items:end;margin-top:14px;padding:12px;border:1px solid var(--border-color);border-radius:10px;">
+                  <div><label>候选单案例调试（仅完整 TRAIN 金标）</label><select id="prompt-single-benchmark" class="form-control"><option value="">请选择案例</option></select></div>
+                  <label style="display:flex;gap:7px;align-items:center;padding-bottom:9px;"><input id="prompt-single-compare" type="checkbox"> 同时对比生产版本</label>
+                  <button class="btn btn-secondary" onclick="evaluatePromptSingleCase()">运行候选单案例</button>
+                </div>
+                <div id="prompt-single-result" class="prompt-result-panel" style="display:none;margin-top:10px;"></div>
                 <div class="prompt-action-row">
                   <button class="btn btn-secondary" onclick="savePromptCandidate()">手工保存为候选</button>
                   <button class="btn btn-secondary" onclick="quickEvaluateSelectedPrompt()">快速回归失败案例</button>
                   <button class="btn btn-primary" onclick="evaluateSelectedPrompt()">运行完整 A/B 回归</button>
-                  <button class="btn btn-success" onclick="activateSelectedPrompt()">启用已通过版本</button>
+                  <button class="btn btn-success" onclick="openPromptPublishModal()">发布并启用</button>
+                  <button class="btn btn-secondary" onclick="activateSelectedPrompt()">回滚/仅启用已通过版本</button>
                 </div>
               </section>
 
@@ -1292,7 +1296,26 @@ FREIGHT TERM: PREPAID`;
     </div>
   </div>
 
-  <!-- Modal: Add / Edit Few-Shot Example -->
+  <!-- Modal: Import complete benchmark -->
+  <div class="modal" id="modal-benchmark-import" role="dialog" aria-modal="true">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header"><h3>人工导入完整金标</h3><button class="modal-close" data-close="modal-benchmark-import">&times;</button></div>
+      <div class="modal-body" style="max-height:75vh;overflow:auto;">
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:12px;">
+          <div><label>案例名称</label><input id="bmi-title" class="form-control" placeholder="例如：中文吨转公斤完整样例"></div>
+          <div><label>单证类型</label><input id="bmi-doc-type" class="form-control" value="GENERAL"></div>
+          <div><label>数据用途</label><select id="bmi-role" class="form-control"><option value="TRAIN">优化集</option><option value="HOLDOUT">保密测试集</option></select></div>
+          <div><label>权重</label><input id="bmi-weight" type="number" min="1" max="100" value="1" class="form-control"></div>
+        </div>
+        <div style="margin-top:12px;"><label>原始文件（可多选）</label><input id="bmi-files" type="file" multiple class="form-control" accept=".eml,.pdf,.xlsx,.xls,.docx,.doc,.jpg,.jpeg,.png,.bmp,.webp,.tiff,.txt,.csv,.json,.md"></div>
+        <div style="margin-top:12px;"><label>完整 57 字段标准答案 JSON</label><textarea id="bmi-ground-truth" class="form-control font-mono" rows="18" placeholder="粘贴完整 Cargo V3 JSON"></textarea></div>
+        <div class="prompt-section-note" style="margin-top:8px;">导入后为待确认草稿；必须完整包含 57 个顶层字段，人工核对并确认后才进入评测。</div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-secondary" data-close="modal-benchmark-import">取消</button><button class="btn btn-primary" onclick="importBenchmark()">导入草稿</button></div>
+    </div>
+  </div>
+
+  <!-- Modal: Benchmark detail -->
   <div class="modal" id="modal-benchmark-detail" role="dialog" aria-modal="true">
     <div class="modal-dialog modal-xl">
       <div class="modal-header"><h3>金标案例详情与逐字段对比</h3><button class="modal-close" data-close="modal-benchmark-detail">&times;</button></div>
@@ -1306,12 +1329,13 @@ FREIGHT TERM: PREPAID`;
         </div>
         <div id="bm-role-note" class="prompt-section-note" style="margin-top:9px;"></div>
         <div style="margin-top:12px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;"><label><input id="bm-active" type="checkbox"> 启用该金标案例</label><span id="bm-verification-status" class="badge badge-secondary">待人工确认</span><span id="bm-verified-meta" class="text-muted" style="font-size:.78rem;"></span></div>
+        <div id="bm-completeness" class="prompt-section-note" style="margin-top:9px;"></div>
         <div style="margin-top:12px;"><label>原始文件</label><div id="bm-files" style="color:#38bdf8;"></div></div>
         <div style="margin-top:12px;"><label>输入文本摘要</label><pre id="bm-input-text" style="white-space:pre-wrap;max-height:160px;overflow:auto;"></pre></div>
         <div style="margin-top:12px;"><label>人工标准答案 JSON</label><textarea id="bm-ground-truth" class="form-control font-mono" rows="15"></textarea></div>
-        <div style="margin-top:16px;"><h4>最近一次回归逐字段结果</h4><div id="bm-latest-summary"></div><div class="table-responsive"><table class="data-table" id="table-bm-diffs"><thead><tr><th>字段</th><th>标准答案</th><th>实际结果</th><th>判定</th></tr></thead><tbody></tbody></table></div></div>
+        <details style="margin-top:14px;"><summary>查看修改历史</summary><div id="bm-revisions" class="prompt-section-note" style="margin-top:8px;">加载中...</div></details>
       </div>
-      <div class="modal-footer"><button class="btn btn-secondary" data-close="modal-benchmark-detail">关闭</button><button class="btn btn-secondary" id="btn-run-single-benchmark" onclick="runSingleBenchmark()">单案例回归</button><button class="btn btn-secondary" onclick="saveBenchmark()">仅保存草稿</button><button class="btn btn-primary" id="btn-verify-benchmark" onclick="verifyBenchmark()">确认标准答案并启用</button></div>
+      <div class="modal-footer"><button class="btn btn-secondary" data-close="modal-benchmark-detail">关闭</button><button class="btn btn-secondary" onclick="saveBenchmark()">仅保存草稿</button><button class="btn btn-primary" id="btn-verify-benchmark" onclick="verifyBenchmark()">确认完整标准答案并启用</button></div>
     </div>
   </div>
 
@@ -1405,7 +1429,7 @@ FREIGHT TERM: PREPAID`;
   <div class="modal" id="modal-version-release" role="dialog" aria-modal="true">
     <div class="modal-dialog">
       <div class="modal-header">
-        <h3>🚀 发布新版本并归档工单</h3>
+        <h3>🚀 发布并启用候选提示词</h3>
         <button class="modal-close" data-close="modal-version-release">&times;</button>
       </div>
       <div class="modal-body">
@@ -1428,7 +1452,7 @@ FREIGHT TERM: PREPAID`;
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-close="modal-version-release">取消</button>
-        <button type="button" class="btn btn-primary" id="btn-confirm-release" onclick="doReleaseVersion()">确认发布版本</button>
+        <button type="button" class="btn btn-primary" id="btn-confirm-release" onclick="publishSelectedPrompt()">确认发布并启用</button>
       </div>
     </div>
   </div>
@@ -1838,7 +1862,7 @@ FREIGHT TERM: PREPAID`;
 
   <div class="toast-container" id="toast-container"></div>
 
-  <script src="/static/js/app.js?v=20260821v62"></script>
+  <script src="/static/js/app.js?v=20260828v63"></script>
 
 
 </body>

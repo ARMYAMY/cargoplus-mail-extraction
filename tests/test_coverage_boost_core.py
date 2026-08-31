@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from app.config import settings
 from app.core.normalizer import CargoNormalizer, default_normalizer
 from app.core.validator import CargoValidator
 from app.core.skill_runner import SkillRunner
@@ -135,3 +136,12 @@ async def test_skill_runner_retries_and_fallback():
         mock_timeout.side_effect = [httpx.TimeoutException("Timeout"), resp_200]
         res_timeout = await runner.call_llm("timeout prompt")
         assert "RETRY_OK" in res_timeout
+
+    # 3. A process-level outbound network restriction produces an actionable error.
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_connect, \
+         patch("asyncio.sleep", new_callable=AsyncMock), \
+         patch.object(settings, "LLM_MAX_RETRIES", 0), \
+         patch.object(settings, "LLM_FALLBACK_MODEL", ""):
+        mock_connect.side_effect = httpx.ConnectError("All connection attempts failed")
+        with pytest.raises(RuntimeError, match="外网访问权限"):
+            await runner.call_llm("connection failure")

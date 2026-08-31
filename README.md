@@ -134,6 +134,10 @@ CORS_ALLOWED_ORIGINS=http://127.0.0.1:8000,http://localhost:8000
 .venv/Scripts/python.exe run.py
 ```
 
+Windows 上需要重启 8001 时，推荐使用 `scripts/restart_local_8001.ps1`。该脚本会先检查
+大模型域名的出站网络连通性；如果当前 PowerShell 无外网权限，它不会停止已经运行的服务，
+从而避免出现健康检查正常、实际抽取却持续报连接失败的假健康状态。
+
 本地开发服务启动后：
 - **Web 管理控制台**：访问 [http://localhost:8000](http://localhost:8000)
 - **Swagger API 文档**：访问 [http://localhost:8000/docs](http://localhost:8000/docs)

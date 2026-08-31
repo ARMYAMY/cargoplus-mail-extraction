@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Set
 from app.config import settings
@@ -32,6 +33,19 @@ PHONE_CONTINUATION_RE = re.compile(r'^[+()0-9][+()0-9\s./\-]{2,29}$')
 STOP_CONTINUATION_RE = re.compile(r'(?i)^\s*(CONTACT|ATTN|EMAIL|邮箱|TEL|PHONE|MOBILE|MOB|电话|FAX|传真|ADD|ADDRESS|ZIP|VAT|PIC|联系人)\b')
 NUMBER_UNIT_RE = re.compile(r'^\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*([A-Za-z㐀-鿿][A-Za-z0-9㐀-鿿()/ .\-]*)?\s*$')
 CJK_RE = re.compile(r'[㐀-鿿]')
+UNLOCODE_RE = re.compile(r'^[A-Z]{2}[A-Z0-9]{3}$')
+SHORT_PORT_CODE_RE = re.compile(r'^[A-Z0-9]{2,4}$')
+ISO_ALPHA2 = set(
+    'AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BW BY BZ '
+    'CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM '
+    'FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT '
+    'JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN '
+    'MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT '
+    'PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL '
+    'TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW'.split()
+)
+KG_UNITS = {'KG', 'KGS', 'KILOGRAM', 'KILOGRAMS', '公斤', '千克'}
+TON_UNITS = {'T', 'TON', 'TONS', 'TONNE', 'TONNES', 'MT', 'MTS', 'METRICTON', 'METRICTONS', '吨'}
 
 
 class CargoNormalizer:
@@ -161,6 +175,46 @@ class CargoNormalizer:
         unit = (match.group(2) or '').strip()
         return number, unit
 
+    def _normalize_weight(self, number: str, unit: str) -> Tuple[str, str]:
+        number = self._as_string(number).strip().replace(',', '')
+        unit = self._as_string(unit).strip()
+        canonical_unit = re.sub(r'[\s().]', '', unit).upper()
+        if canonical_unit in KG_UNITS:
+            return number, 'KGS'
+        if canonical_unit not in TON_UNITS:
+            return number, unit
+        try:
+            kilograms = Decimal(number) * Decimal('1000')
+        except (InvalidOperation, ValueError):
+            return number, unit
+        text = format(kilograms, 'f')
+        if '.' in text:
+            text = text.rstrip('0').rstrip('.')
+        return text or '0', 'KGS'
+
+    def _normalize_port_pair(self, code: str, name: str) -> Tuple[str, str]:
+        raw_code = self._as_string(code).strip()
+        raw_name = self._as_string(name).strip()
+        if not raw_code:
+            return '', raw_name
+
+        compact = re.sub(r'[\s\-/]', '', raw_code).upper()
+        if UNLOCODE_RE.fullmatch(compact) and compact[:2] in ISO_ALPHA2:
+            return compact, raw_name
+
+        # Preserve short code-like values because the normalizer cannot inspect
+        # the original label and therefore cannot distinguish customer/IATA-like
+        # codes from short place names with sufficient confidence.
+        if SHORT_PORT_CODE_RE.fullmatch(compact):
+            return compact, raw_name
+
+        # Longer non-UN/LOCODE values are clear place-name candidates, such as
+        # POL: YANTIAN or POD: MELBOURNE. Move them only when no name was already
+        # extracted; otherwise discard the invalid code-field duplicate.
+        if not raw_name:
+            return '', raw_code
+        return '', raw_name
+
     def _has_cjk(self, value: str) -> bool:
         return bool(CJK_RE.search(self._as_string(value)))
 
@@ -285,6 +339,16 @@ class CargoNormalizer:
         """Runs the complete V3 normalization pipeline on a draft JSON."""
         result = self._ordered_top(draft)
 
+        for code_field, name_field in [
+            ('POR', 'PORName'),
+            ('POL', 'POLName'),
+            ('POD', 'PODName'),
+            ('DeliveryCode', 'DeliveryName'),
+        ]:
+            result[code_field], result[name_field] = self._normalize_port_pair(
+                result[code_field], result[name_field]
+            )
+
         for party in ('Shipper', 'Consignee', 'Notify'):
             addr_field = f'{party}Addr'
             contacts = self._extract_contacts(result[addr_field])
@@ -306,6 +370,10 @@ class CargoNormalizer:
             result[value_field] = number
             if not result[unit_field]:
                 result[unit_field] = unit
+            if value_field in {'GrossWeight', 'NetWeight'}:
+                result[value_field], result[unit_field] = self._normalize_weight(
+                    result[value_field], result[unit_field]
+                )
         result['PackagesUnit'] = self._normalize_goods_package(result['PackagesUnit'])
 
         result['GoodsName'], result['GoodsNameCN'] = self._split_goods_name(result['GoodsName'], result['GoodsNameCN'])
@@ -324,6 +392,7 @@ class CargoNormalizer:
             item['KGS'] = number
             if not item['KGSunit']:
                 item['KGSunit'] = unit
+            item['KGS'], item['KGSunit'] = self._normalize_weight(item['KGS'], item['KGSunit'])
 
             number, unit = self._split_number_unit(item['PCS'])
             item['PCS'] = number

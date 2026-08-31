@@ -99,7 +99,7 @@ graph TB
 ### 2.2 多模态单证解析与 OCR 引擎 (`app/core/parser/`)
 - **调度分发中心 (`__init__.py`)**：根据文件 MIME/扩展名自动路由至专用解析器；
 - **邮件解析 (`eml_parser.py`)**：利用标准 Python `email` 模块解析 RFC822 结构，递归提取内嵌正文与附件，HTML 正文利用自定义算法转为干净的 Markdown 纯文本；
-- **表格解析 (`excel_parser.py`)**：利用 `openpyxl` 提取多 Sheet 表格，空行过滤并渲染为标准 Markdown 表格，单 Sheet 前 100 行限额保护；
+- **表格解析 (`excel_parser.py` / `xls_parser.py`)**：新版 `.xlsx` 使用 `openpyxl`，旧版 `.xls` 使用 `xlrd`，提取多 Sheet 表格、过滤空行并渲染为标准 Markdown 表格；单 Sheet 最多读取 100 行、100 列，单元格最多保留 2,000 字符；
 - **文档解析 (`pdf_parser.py`, `word_parser.py`)**：利用 `pypdf` 与 `python-docx` 提取文档层文本与表格；
 - **本地 OCR 引擎 (`ocr_engine.py`)**：基于 `rapidocr_onnxruntime` 构建本地高性能轻量 OCR 引擎，对各类海运单证扫描图片进行高精度文字识别。
 

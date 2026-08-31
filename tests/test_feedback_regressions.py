@@ -29,6 +29,7 @@ from app.models.feedback import (
 from app.models.task import EmailTask
 from app.models.tenant import Tenant
 from app.schemas.feedback import TaskFeedbackCreateRequest
+from app.schemas.cargo_v3 import CargoV3Output
 from app.services.auth_service import create_access_token
 from app.services.billing_service import BillingService
 from app.services.evaluation_service import (
@@ -793,6 +794,81 @@ async def test_activate_validated_version_switches_production():
 
 
 @pytest.mark.asyncio
+async def test_publish_prompt_requires_matching_complete_ab_job_and_activates():
+    await init_db()
+    system_tag = _unique("v4_publish")
+    async with AsyncSessionLocal() as db:
+        candidate = PromptVersion(
+            version_tag=_unique("publish_candidate"),
+            content=VALID_PROMPT_CONTENT,
+            status="VALIDATED",
+        )
+        db.add(candidate)
+        await db.flush()
+        run = EvaluationRun(
+            prompt_version_id=candidate.id,
+            status="COMPLETED",
+            can_release=True,
+            overall_accuracy=100,
+            total_cases=2,
+            passed_cases=2,
+            critical_regressions=0,
+            finished_at=datetime.now(timezone.utc),
+        )
+        db.add(run)
+        await db.flush()
+        candidate.evaluation_run_id = run.id
+        await db.commit()
+
+        cases = (
+            await db.execute(
+                select(BenchmarkCase).where(
+                    BenchmarkCase.is_active.is_(True),
+                    BenchmarkCase.verification_status == "VERIFIED",
+                ).order_by(BenchmarkCase.id.asc())
+            )
+        ).scalars().all()
+        snapshot = [
+            f"{case.id}:{case.updated_at.isoformat()}"
+            for case in cases
+            if len(case.ground_truth or {}) == 57
+        ]
+        job = AdminJob(
+            job_type="PROMPT_EVALUATION",
+            status="COMPLETED",
+            phase="COMPLETED",
+            input_payload={"prompt_id": candidate.id, "benchmark_snapshot": snapshot},
+            result={
+                "no_regression": True,
+                "can_release": True,
+                "overall_accuracy_percent": 100,
+                "total_cases": 2,
+                "passed_cases": 2,
+            },
+            finished_at=datetime.now(timezone.utc),
+        )
+        db.add(job)
+        await db.commit()
+        candidate_id, job_id = candidate.id, job.id
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/admin/prompts/{candidate_id}/publish",
+            headers=_admin_headers(),
+            json={
+                "version_tag": system_tag,
+                "changelog": "完整 A/B 通过后统一发布",
+                "evaluation_job_id": job_id,
+                "mark_accepted_as_resolved": False,
+            },
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["prompt"]["status"] == "ACTIVE"
+    assert response.json()["data"]["version_tag"] == system_tag
+
+
+@pytest.mark.asyncio
 async def test_evaluate_backfills_baseline_run_and_allows_rollback():
     await init_db()
     transport = ASGITransport(app=app)
@@ -1051,8 +1127,54 @@ async def test_unverified_benchmark_is_excluded_from_export_and_regression():
     assert exported.status_code == 200
     assert case_id not in exported.text
     assert single.status_code == 409
-    assert verified.status_code == 200
-    assert case_id in exported_after.text
+    assert verified.status_code == 409
+    assert "57" in verified.json()["detail"]["message"]
+    assert case_id not in exported_after.text
+
+
+@pytest.mark.asyncio
+async def test_manual_benchmark_import_uses_complete_template_and_keeps_weight():
+    await init_db()
+    marker = _unique("manual_gold")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        template_response = await client.get(
+            "/admin/benchmarks/template", headers=_admin_headers()
+        )
+        assert template_response.status_code == 200
+        ground_truth = template_response.json()["data"]
+        assert len(ground_truth) == 57
+        ground_truth["BLNo"] = marker
+
+        imported = await client.post(
+            "/admin/benchmarks/import",
+            headers=_admin_headers(),
+            data={
+                "title": marker,
+                "doc_type": "BILL_OF_LADING",
+                "dataset_role": "TRAIN",
+                "weight": "37",
+                "ground_truth_json": json.dumps(ground_truth, ensure_ascii=False),
+            },
+            files={"files": (f"{marker}.txt", b"B/L NO: TEST", "text/plain")},
+        )
+        assert imported.status_code == 200, imported.text
+        case_id = imported.json()["data"]["id"]
+
+        listed = await client.get("/admin/benchmarks", headers=_admin_headers())
+        item = next(row for row in listed.json()["data"] if row["id"] == case_id)
+        assert item["source_type"] == "MANUAL"
+        assert item["is_complete"] is True
+        assert item["weight"] == 37
+        assert item["verification_status"] == "DRAFT"
+        assert item["is_active"] is False
+
+        verified = await client.put(
+            f"/admin/benchmarks/{case_id}",
+            headers=_admin_headers(),
+            json={"verification_status": "VERIFIED"},
+        )
+        assert verified.status_code == 200, verified.text
 
 
 @pytest.mark.asyncio
@@ -1368,12 +1490,12 @@ async def test_holdout_cannot_run_single_case_or_enter_export():
         db.add_all([
             BenchmarkCase(
                 id=train_id, title="export-train-marker", doc_type="GENERAL", dataset_role="TRAIN",
-                input_text="TRAIN_INPUT", ground_truth={"BLNo": "TRAIN_EXPORT"},
+                input_text="TRAIN_INPUT", ground_truth=CargoV3Output(BLNo="TRAIN_EXPORT").model_dump(),
                 is_active=True, verification_status="VERIFIED", verified_by="admin",
             ),
             BenchmarkCase(
                 id=holdout_id, title="holdout-secret-marker", doc_type="GENERAL", dataset_role="HOLDOUT",
-                input_text="HOLDOUT_SECRET_INPUT", ground_truth={"BLNo": "HOLDOUT_SECRET_ANSWER"},
+                input_text="HOLDOUT_SECRET_INPUT", ground_truth=CargoV3Output(BLNo="HOLDOUT_SECRET_ANSWER").model_dump(),
                 is_active=True, verification_status="VERIFIED", verified_by="admin",
             ),
         ])

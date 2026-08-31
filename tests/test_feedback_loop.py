@@ -10,6 +10,7 @@ from app.models.billing import BillingTransaction
 from app.models.feedback import BenchmarkCase, TaskFeedback
 from app.models.task import EmailTask
 from app.models.tenant import ApiKey, Tenant
+from app.schemas.cargo_v3 import CargoV3Output
 from app.services.auth_service import create_access_token, generate_api_key_and_secret, hash_password
 from app.services.extraction_service import ExtractionService
 
@@ -58,12 +59,12 @@ async def test_feedback_loop_end_to_end():
             input_type="TEXT",
             mail_subject="订舱确认测试件",
             input_summary="测试内容",
-            result_json=json.dumps({
-                "BookingNo": "COSCO12345",
-                "VesselName": "EVER GIVEN",
-                "PortOfLoading": "SHANGHAI",
-                "PortOfDischarge": "ROTTERDAM",
-            }),
+            result_json=json.dumps(CargoV3Output(
+                BookingNo="COSCO12345",
+                Vessel="EVER GIVEN",
+                POLName="SHANGHAI",
+                PODName="ROTTERDAM",
+            ).model_dump()),
             is_charged=True,
             charged_amount=Decimal("0.5000"),
         )
@@ -96,12 +97,12 @@ async def test_feedback_loop_end_to_end():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # 1. Tenant submits feedback
-        corrected = {
-            "BookingNo": "MAERSK99999",  # Corrected
-            "VesselName": "EVER GIVEN",
-            "PortOfLoading": "SHANGHAI",
-            "PortOfDischarge": "HAMBURG",  # Corrected
-        }
+        corrected = CargoV3Output(
+            BookingNo="MAERSK99999",  # Corrected
+            Vessel="EVER GIVEN",
+            POLName="SHANGHAI",
+            PODName="HAMBURG",  # Corrected
+        ).model_dump()
         res_submit = await client.post(
             f"/api/v1/tasks/{task_id}/feedback",
             headers={"Authorization": f"Bearer {tenant_token}"},
@@ -112,7 +113,7 @@ async def test_feedback_loop_end_to_end():
         fb_id = data["feedback_id"]
         assert data["status"] == "PENDING"
         assert "BookingNo" in data["diff_fields"]
-        assert "PortOfDischarge" in data["diff_fields"]
+        assert "PODName" in data["diff_fields"]
 
         # 2. Tenant checks feedback status
         res_status = await client.get(

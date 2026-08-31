@@ -6,6 +6,7 @@ from app.schemas.task import AttachmentInput, SkillV3InputPayload
 from app.core.parser.eml_parser import parse_eml
 from app.core.parser.pdf_parser import parse_pdf
 from app.core.parser.excel_parser import parse_excel
+from app.core.parser.xls_parser import XlsParseError, parse_xls
 from app.core.parser.word_parser import parse_word
 from app.core.parser.doc_parser import DocParseError, parse_doc
 from app.core.parser.ocr_engine import extract_ocr_from_image
@@ -76,6 +77,9 @@ def parse_single_file(
         elif ext == ".xlsx":
             content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             text, tables, ocr_text = parse_excel(file_path)
+        elif ext == ".xls":
+            content_type = "application/vnd.ms-excel"
+            text, tables, ocr_text = parse_xls(file_path)
         elif ext == ".docx":
             content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             text, tables, ocr_text = parse_word(file_path, vision_budget)
@@ -92,8 +96,8 @@ def parse_single_file(
             text = file_path.read_text(encoding="utf-8", errors="replace")
         else:
             text = f"[Binary or unsupported attachment format: {filename}]"
-    except DocParseError:
-        # Malformed legacy DOC files must stop before invoking or billing the LLM.
+    except (DocParseError, XlsParseError):
+        # Malformed legacy Office files must stop before invoking or billing the LLM.
         raise
     except Exception as e:
         logger.error(f"Error parsing file {file_path}: {e}")
