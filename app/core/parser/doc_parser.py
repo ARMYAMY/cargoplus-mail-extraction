@@ -80,11 +80,14 @@ def _clean_word_text(text: str) -> str:
     for source, target in replacements.items():
         text = text.replace(source, target)
     text = "".join(char for char in text if char in "\n\t" or ord(char) >= 0x20)
-    lines = [
-        "\t".join(" ".join(cell.split()) for cell in line.split("\t")).strip(" \t")
-        for line in text.splitlines()
-    ]
-    return "\n".join(line for line in lines if line).strip()[:MAX_EXTRACTED_CHARS]
+    lines = []
+    for line in text.splitlines():
+        # Preserve leading and trailing tab-delimited empty cells.  They carry
+        # column alignment in legacy Word forms and must not be shifted away.
+        cleaned = "\t".join(" ".join(cell.split()) for cell in line.split("\t"))
+        if cleaned.strip(" \t"):
+            lines.append(cleaned)
+    return "\n".join(lines).strip("\n")[:MAX_EXTRACTED_CHARS]
 
 
 def _extract_table_data(text: str) -> List[Any]:
@@ -101,7 +104,10 @@ def _extract_table_data(text: str) -> List[Any]:
             finish_table()
             continue
         cells = [cell.strip()[:2_000] for cell in line.split("\t")[:100]]
-        while cells and not cells[-1]:
+        # Word/RTF emits one cell delimiter after the final cell.  Remove only
+        # that structural terminator while keeping real leading, interior, and
+        # trailing empty cells intact.
+        if cells and not cells[-1]:
             cells.pop()
         if len(cells) >= 2 and any(cells):
             current_rows.append(cells)
@@ -496,20 +502,29 @@ class _BoundedHTMLTextParser(HTMLParser):
         self.parts: List[str] = []
         self.length = 0
         self.ignored_depth = 0
+        self.table_cells_in_row = 0
 
     def handle_starttag(self, tag: str, attrs: List[Tuple[str, str | None]]) -> None:
         del attrs
         if tag.lower() in {"script", "style"}:
             self.ignored_depth += 1
-        elif tag.lower() in {"br", "p", "div", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6"}:
+        elif tag.lower() == "tr":
+            self._append("\n")
+            self.table_cells_in_row = 0
+        elif tag.lower() in {"br", "p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6"}:
             self._append("\n")
         elif tag.lower() in {"td", "th"}:
-            self._append("\t")
+            if self.table_cells_in_row:
+                self._append("\t")
+            self.table_cells_in_row += 1
 
     def handle_endtag(self, tag: str) -> None:
         if tag.lower() in {"script", "style"} and self.ignored_depth:
             self.ignored_depth -= 1
-        elif tag.lower() in {"p", "div", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6"}:
+        elif tag.lower() == "tr":
+            self._append("\n")
+            self.table_cells_in_row = 0
+        elif tag.lower() in {"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6"}:
             self._append("\n")
 
     def handle_data(self, data: str) -> None:

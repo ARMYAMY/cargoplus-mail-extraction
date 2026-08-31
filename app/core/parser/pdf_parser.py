@@ -31,7 +31,16 @@ def parse_pdf(
 
         pages_to_process = reader.pages[:MAX_PAGES]
         for page_idx, page in enumerate(pages_to_process):
-            page_text = page.extract_text() or ""
+            # Layout mode preserves horizontal spacing and empty columns in
+            # form-style shipping documents.  Plain extraction can collapse a
+            # row such as ``POR | POL | POD | FPOD`` and shift all non-empty
+            # values to the left, changing their business meaning.
+            try:
+                page_text = page.extract_text(extraction_mode="layout") or ""
+            except (TypeError, ValueError, NotImplementedError):
+                # Keep compatibility with older pypdf releases and unusual
+                # pages that cannot be processed by the layout extractor.
+                page_text = page.extract_text() or ""
             if page_text.strip():
                 text_parts.append(page_text.strip())
 

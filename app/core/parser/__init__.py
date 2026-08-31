@@ -30,30 +30,36 @@ def compress_text_content(text: str, max_chars: int = 8000) -> str:
     if not text or len(text) <= max_chars:
         return text
 
-    lines = text.splitlines()
-    high_priority_lines = []
-    normal_lines = []
+    # Select cargo-related lines first, but restore their original order before
+    # returning the text.  Reordering all labels ahead of their values breaks
+    # form semantics, and stripping leading whitespace destroys PDF columns.
+    lines = []
+    for index, raw_line in enumerate(text.splitlines()):
+        preserved = raw_line.rstrip()
+        probe = preserved.strip()
+        if probe:
+            lines.append((index, preserved, bool(CARGO_KEYWORDS.search(probe))))
 
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if CARGO_KEYWORDS.search(stripped):
-            high_priority_lines.append(stripped)
-        else:
-            normal_lines.append(stripped)
+    selected = set()
+    used = 0
+    for priority in (True, False):
+        for index, line, is_priority in lines:
+            if is_priority != priority:
+                continue
+            cost = len(line) + (1 if selected else 0)
+            if used + cost > max_chars:
+                continue
+            selected.add(index)
+            used += cost
 
-    # First take high-priority lines
-    compressed = "\n".join(high_priority_lines)
-    if len(compressed) < max_chars:
-        remaining = max_chars - len(compressed)
-        for line in normal_lines:
-            if len(line) + 1 <= remaining:
-                compressed += "\n" + line
-                remaining -= len(line) + 1
-            else:
-                break
-
+    compressed = "\n".join(
+        line for index, line, _ in lines if index in selected
+    )
+    if not compressed and lines:
+        # A single very long line may not fit the line budget. Preserve its
+        # beginning instead of returning an empty attachment.
+        priority_line = next((line for _, line, flag in lines if flag), lines[0][1])
+        return priority_line[:max_chars]
     return compressed[:max_chars]
 
 
