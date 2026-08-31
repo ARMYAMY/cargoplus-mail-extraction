@@ -1311,7 +1311,7 @@ FREIGHT TERM: PREPAID`;
         <div style="margin-top:12px;"><label>完整 57 字段标准答案 JSON</label><textarea id="bmi-ground-truth" class="form-control font-mono" rows="18" placeholder="粘贴完整 Cargo V3 JSON"></textarea></div>
         <div class="prompt-section-note" style="margin-top:8px;">导入后为待确认草稿；必须完整包含 57 个顶层字段，人工核对并确认后才进入评测。</div>
       </div>
-      <div class="modal-footer"><button class="btn btn-secondary" data-close="modal-benchmark-import">取消</button><button class="btn btn-primary" onclick="importBenchmark()">导入草稿</button></div>
+      <div class="modal-footer"><button class="btn btn-secondary" data-close="modal-benchmark-import">取消</button><button id="btn-import-benchmark" class="btn btn-primary" onclick="importBenchmark()">导入草稿</button></div>
     </div>
   </div>
 
@@ -1862,7 +1862,7 @@ FREIGHT TERM: PREPAID`;
 
   <div class="toast-container" id="toast-container"></div>
 
-  <script src="/static/js/app.js?v=20260828v63"></script>
+  <script src="/static/js/app.js?v=20260831v64"></script>
 
 
 </body>

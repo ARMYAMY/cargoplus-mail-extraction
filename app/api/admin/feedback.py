@@ -373,7 +373,7 @@ async def accept_feedback(
 
     # 2. Convert to BenchmarkCase
     if payload.create_benchmark and fb.diff_fields and fb.corrected_result:
-        benchmark_dir = (settings.uploads_path.parent / "benchmark_files" / fb.id).resolve()
+        benchmark_dir = (settings.uploads_path / "benchmark_files" / fb.id).resolve()
         benchmark_dir.mkdir(parents=True, exist_ok=True)
         copied_files = []
         file_hashes = {}
@@ -768,8 +768,8 @@ async def import_benchmark(
             raise HTTPException(status_code=415, detail=f"不支持的文件类型: {raw_name}")
 
     case_id = f"bm_{uuid.uuid4().hex[:14]}"
-    benchmark_dir = (settings.uploads_path.parent / "benchmark_files" / case_id).resolve()
-    benchmark_root = (settings.uploads_path.parent / "benchmark_files").resolve()
+    benchmark_dir = (settings.uploads_path / "benchmark_files" / case_id).resolve()
+    benchmark_root = (settings.uploads_path / "benchmark_files").resolve()
     if not benchmark_dir.is_relative_to(benchmark_root):
         raise HTTPException(status_code=400, detail="金标文件目录无效")
     benchmark_dir.mkdir(parents=True, exist_ok=True)
@@ -982,7 +982,7 @@ async def download_benchmark_file(case_id: str, filename: str, db: AsyncSession 
     case = (await db.execute(select(BenchmarkCase).where(BenchmarkCase.id == case_id))).scalar_one_or_none()
     if not case:
         raise HTTPException(status_code=404, detail="金标案例不存在")
-    benchmark_root = (settings.uploads_path.parent / "benchmark_files").resolve()
+    benchmark_root = (settings.uploads_path / "benchmark_files").resolve()
     for raw_path in case.source_files or []:
         candidate = Path(raw_path).resolve()
         if candidate.name == filename and candidate.is_relative_to(benchmark_root) and candidate.is_file():
@@ -2014,6 +2014,16 @@ async def _run_regression_job(job_id: str) -> None:
                 evaluation_label="候选版本 · 单案例",
                 require_complete=True,
             )
+            candidate_error = next(
+                (
+                    row.get("error")
+                    for row in (candidate.get("case_results") or [])
+                    if row.get("error")
+                ),
+                None,
+            )
+            if candidate_error:
+                raise ValueError(candidate_error)
             result = {
                 **candidate,
                 "single_case": True,
@@ -2035,6 +2045,16 @@ async def _run_regression_job(job_id: str) -> None:
                     evaluation_label="生产版本 · 单案例",
                     require_complete=True,
                 )
+                baseline_error = next(
+                    (
+                        row.get("error")
+                        for row in (baseline.get("case_results") or [])
+                        if row.get("error")
+                    ),
+                    None,
+                )
+                if baseline_error:
+                    raise ValueError(baseline_error)
                 comparison = build_ab_comparison(baseline, candidate)
                 result.update({
                     "baseline": baseline,

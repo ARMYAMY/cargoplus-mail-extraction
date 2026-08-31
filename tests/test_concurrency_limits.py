@@ -52,4 +52,4 @@ def test_frontend_concurrency_limits_match_backend_constants():
     assert "/admin/tasks?page=2&page_size=100" not in javascript
     assert "120000" not in html
     assert "legacyBenchmarkImplementationNotUsed" not in html
-    assert '/static/js/app.js?v=20260828v63' in html
+    assert '/static/js/app.js?v=20260831v64' in html

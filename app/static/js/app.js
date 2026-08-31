@@ -2996,6 +2996,7 @@ MEAS: 68.000 CBM`;
   };
 
   window.importBenchmark = async function() {
+    const button=document.getElementById('btn-import-benchmark');
     const title=document.getElementById('bmi-title').value.trim();
     const files=Array.from(document.getElementById('bmi-files').files||[]);
     const groundTruth=document.getElementById('bmi-ground-truth').value.trim();
@@ -3009,10 +3010,22 @@ MEAS: 68.000 CBM`;
     form.append('weight',document.getElementById('bmi-weight').value||'1');
     form.append('ground_truth_json',groundTruth);
     files.forEach(file=>form.append('files',file));
-    const res=await adminFetch('/admin/benchmarks/import',{method:'POST',body:form});
-    const body=await res.json();
-    if(!res.ok)return showToast('error',typeof body.detail==='string'?body.detail:JSON.stringify(body.detail));
-    showToast('success',body.message);closeModal('modal-benchmark-import');await loadBenchmarks();
+    if(button){button.disabled=true;button.textContent='正在导入...';}
+    try{
+      const res=await adminFetch('/admin/benchmarks/import',{method:'POST',body:form});
+      const responseText=await res.text();
+      let body={};
+      try{body=responseText?JSON.parse(responseText):{};}catch(_err){body={};}
+      if(!res.ok){
+        const detail=typeof body.detail==='string'?body.detail:(body.detail?JSON.stringify(body.detail):responseText||`HTTP ${res.status}`);
+        throw new Error(detail);
+      }
+      showToast('success',body.message||'完整金标已导入为草稿');closeModal('modal-benchmark-import');await loadBenchmarks();
+    }catch(err){
+      showToast('error',`导入失败：${err.message||'服务器未返回有效响应'}`);
+    }finally{
+      if(button){button.disabled=false;button.textContent='导入草稿';}
+    }
   };
 
   window.loadBenchmarkRevisions = async function(id) {
@@ -3499,6 +3512,14 @@ MEAS: 68.000 CBM`;
     if(!panel)return;
     panel.style.display='block';
     const candidateCase=(data.candidate?.case_results||data.case_results||[])[0]||{};
+    const baselineCase=(data.baseline?.case_results||[])[0]||{};
+    const extractionErrors=[baselineCase.error,candidateCase.error].filter(Boolean);
+    if(extractionErrors.length){
+      const uniqueErrors=[...new Set(extractionErrors)];
+      panel.innerHTML=`<strong style="color:#f87171;">模型返回空提取结果</strong><div class="prompt-section-note" style="margin-top:8px;line-height:1.7;">${uniqueErrors.map(error=>escapeHtml(error)).join('<br>')}</div><div style="margin-top:10px;"><button class="btn btn-sm btn-primary" onclick="evaluatePromptSingleCase()">重新运行候选单案例</button></div>`;
+      showToast('warning','模型返回空提取结果，请检查原始文件和提示词后重试');
+      return;
+    }
     if(data.compare_with_active&&data.ab_comparison){
       const compared=(data.ab_comparison.cases||[])[0]||{};
       const changed=(compared.field_comparisons||[]).filter(row=>row.classification!=='UNCHANGED_CORRECT');

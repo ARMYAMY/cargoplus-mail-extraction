@@ -61,7 +61,11 @@ class AdminJobService:
             await cls.fail(job_id, "UPSTREAM_HTTP_ERROR", f"模型服务返回 HTTP {exc.response.status_code}: {exc}")
         except (ValueError, TypeError) as exc:
             message = str(exc)
-            if "没有返回正文" in message or "正文为空" in message:
+            if (
+                "没有返回正文" in message
+                or "正文为空" in message
+                or "模型返回空提取结果" in message
+            ):
                 code = "EMPTY_RESPONSE"
             else:
                 code = "FORMAT_ERROR" if "JSON" in message or "格式" in message or "rules 数组" in message else "VALIDATION_FAILED"

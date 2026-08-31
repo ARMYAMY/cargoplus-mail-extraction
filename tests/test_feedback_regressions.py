@@ -1161,6 +1161,14 @@ async def test_manual_benchmark_import_uses_complete_template_and_keeps_weight()
         assert imported.status_code == 200, imported.text
         case_id = imported.json()["data"]["id"]
 
+        async with AsyncSessionLocal() as db:
+            stored_case = await db.get(BenchmarkCase, case_id)
+            assert stored_case is not None
+            assert stored_case.source_files
+            stored_file = Path(stored_case.source_files[0]).resolve()
+            assert stored_file.is_relative_to(settings.uploads_path.resolve())
+            assert stored_file.is_file()
+
         listed = await client.get("/admin/benchmarks", headers=_admin_headers())
         item = next(row for row in listed.json()["data"] if row["id"] == case_id)
         assert item["source_type"] == "MANUAL"

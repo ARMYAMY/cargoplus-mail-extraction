@@ -27,11 +27,43 @@ from app.services.webhook_dispatcher import dispatch_webhook
 logger = logging.getLogger(__name__)
 
 
+EMPTY_EXTRACTION_MESSAGE = (
+    "模型返回空提取结果。可能原因：原始文件或正文未解析出有效内容、模型未识别出货代业务字段，"
+    "或提示词与当前输入不匹配。请确认文件内容清晰且只包含一个业务案例后重试。"
+)
+
+
+class EmptyExtractionResultError(ValueError):
+    """Raised when normalization only produced the allowed GoodsType default."""
+
+
+def _has_meaningful_value(value: Any) -> bool:
+    if value is None or value == "":
+        return False
+    if isinstance(value, dict):
+        return any(_has_meaningful_value(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_has_meaningful_value(item) for item in value)
+    return True
+
+
 def utc_now():
     return datetime.now(timezone.utc)
 
 
 class ExtractionService:
+    @staticmethod
+    def ensure_meaningful_result(result: Dict[str, Any]) -> None:
+        """Reject an all-empty result whose only value is the derived GoodsType=S default."""
+        meaningful = {
+            key: value
+            for key, value in (result or {}).items()
+            if key != "GoodsType" and _has_meaningful_value(value)
+        }
+        goods_type = (result or {}).get("GoodsType")
+        if not meaningful and goods_type in (None, "", "S"):
+            raise EmptyExtractionResultError(EMPTY_EXTRACTION_MESSAGE)
+
     @staticmethod
     async def process_task(
         task_id: str,
@@ -171,6 +203,7 @@ class ExtractionService:
             if not is_valid:
                 details = "; ".join(validation_errors[:5])
                 raise ValueError(f"Normalized output failed V3 schema validation: {details}")
+            ExtractionService.ensure_meaningful_result(final_v3_json)
 
             # Step 4: Record Success & Deduct Balance
             duration_ms = int((time.time() - start_time) * 1000)
@@ -369,6 +402,7 @@ class ExtractionService:
             progress_callback=model_progress_callback,
         )
         final_v3_json = default_normalizer.normalize(draft_json)
+        cls.ensure_meaningful_result(final_v3_json)
         return final_v3_json
 
     @classmethod

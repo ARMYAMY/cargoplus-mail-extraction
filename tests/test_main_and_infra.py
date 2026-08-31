@@ -37,7 +37,7 @@ async def test_main_routes_and_security_headers():
         res_root = await client.get("/")
         assert res_root.status_code == 200
         assert res_root.headers.get("Cache-Control") == "no-cache"
-        assert "/static/js/app.js?v=20260828v63" in res_root.text
+        assert "/static/js/app.js?v=20260831v64" in res_root.text
 
         res_app_js = await client.get("/static/js/app.js?v=20260828v63")
         assert res_app_js.status_code == 200
