@@ -1,11 +1,12 @@
 import logging
 from pathlib import Path
-from typing import Any, List, Tuple
+import time
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from docx import Document
 from docx.document import Document as DocumentObject
 from docx.table import Table
 from docx.text.paragraph import Paragraph
-from app.services.vision_service import VisionBudget, VisionService
+from app.services.vision_service import HighAccuracyVisionError, VisionBudget, VisionService
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,9 @@ def _table_markdown(rows: List[List[str]]) -> str:
 def parse_word(
     file_path: Path,
     vision_budget: VisionBudget | None = None,
+    recognition_mode: str = "standard",
+    vision_report: Optional[Dict[str, Any]] = None,
+    stage_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None,
 ) -> Tuple[str, List[Any], str]:
     """
     Parses a Word (.docx) document.
@@ -100,21 +104,41 @@ def parse_word(
                 if "image" in content_type or "image" in part_name:
                     img_bytes = getattr(rel_part, "blob", None)
                     if img_bytes and VisionService.is_valid_document_image(img_bytes):
+                        if recognition_mode == "high_accuracy" and vision_report is not None:
+                            vision_report["pages_total"] = vision_report.get("pages_total", 0) + 1
                         if not vision_budget.try_acquire():
+                            if recognition_mode == "high_accuracy":
+                                raise HighAccuracyVisionError("高精度视觉识别页数或总耗时超过本次任务限制")
                             break
+                        started = time.monotonic()
                         try:
+                            if stage_callback:
+                                stage_callback("VISION_OCR", {"filename": file_path.name, "image": rel_id})
                             img_text = VisionService.transcribe_image_sync(
                                 img_bytes,
                                 filename_hint=f"{file_path.name}_embedded_{rel_id}",
                                 custom_timeout=vision_budget.request_timeout(),
+                                enabled=True if recognition_mode == "high_accuracy" else None,
+                                allow_local_fallback=recognition_mode != "high_accuracy",
                             )
                             if img_text.strip():
                                 ocr_parts.append(
                                     f"[Word文档内嵌单证截图/图片识别内容]:\n{img_text.strip()}"
                                 )
+                                if recognition_mode == "high_accuracy" and vision_report is not None:
+                                    vision_report["pages_processed"] = vision_report.get("pages_processed", 0) + 1
+                                    vision_report["duration_ms"] = vision_report.get("duration_ms", 0) + int(
+                                        (time.monotonic() - started) * 1000
+                                    )
+                            elif recognition_mode == "high_accuracy":
+                                raise HighAccuracyVisionError("高精度视觉模型未返回 Word 内嵌图片识别文本")
+                        except HighAccuracyVisionError:
+                            raise
                         except Exception as img_err:
                             logger.warning(f"Error transcribing Word embedded image in {file_path.name}: {img_err}")
 
+    except HighAccuracyVisionError:
+        raise
     except Exception as e:
         logger.error(f"Failed to parse Word document {file_path}: {e}")
         return "", [], f"Error parsing Word: {str(e)}"

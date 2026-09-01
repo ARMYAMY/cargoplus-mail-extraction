@@ -60,6 +60,10 @@ def _format_task_response(
         reserved_amount=task.reserved_amount,
         is_reserved=task.is_reserved,
         duration_ms=task.duration_ms,
+        recognition_mode=task.recognition_mode or "standard",
+        vision_pages_total=task.vision_pages_total or 0,
+        vision_pages_processed=task.vision_pages_processed or 0,
+        vision_duration_ms=task.vision_duration_ms,
         callback_url=task.callback_url,
         callback_status=task.callback_status,
         created_at=task.created_at,
@@ -187,6 +191,9 @@ async def retry_task(
     task.completed_at = None
     task.duration_ms = None
     task.result_json = None
+    task.vision_pages_total = 0
+    task.vision_pages_processed = 0
+    task.vision_duration_ms = None
     task.callback_status = "PENDING" if task.callback_url else "NONE"
     task.reserved_amount = reserved_amount
     task.is_reserved = True

@@ -618,6 +618,16 @@ FREIGHT TERM: PREPAID`;
                   <div id="wb-selected-files" class="selected-files-list"></div>
                 </div>
 
+                <div class="form-group" style="margin:12px 0 16px; padding:12px; border:1px solid var(--border-color); border-radius:8px;">
+                  <label style="display:flex; align-items:center; gap:8px; margin:0; cursor:pointer;">
+                    <input type="checkbox" id="wb-high-accuracy">
+                    <span><strong>高精度视觉识别</strong>（耗时和模型调用量会增加）</span>
+                  </label>
+                  <div class="file-hint" style="margin-top:6px;">
+                    适合版面复杂、文字层乱码或标签和值容易错位的 PDF；系统会逐页视觉识别并保留原版面文本。默认关闭。
+                  </div>
+                </div>
+
                 <div class="form-actions">
                   <button class="btn btn-primary" id="wb-btn-run-file">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>

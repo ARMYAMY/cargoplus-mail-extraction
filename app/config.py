@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     VISION_LLM_MODEL: str = "qwen3.8-27b"
     VISION_LLM_TIMEOUT_SECONDS: int = Field(default=30, ge=5, le=300)
     VISION_MAX_IMAGES_PER_TASK: int = Field(default=5, ge=1, le=20)
+    HIGH_ACCURACY_MAX_PAGES: int = Field(default=20, ge=1, le=50)
 
     # Skill V3 Assets Location
     SKILL_V3_PATH: str = str(BASE_DIR.parent / "cargo-mail-extraction-skill-v3")

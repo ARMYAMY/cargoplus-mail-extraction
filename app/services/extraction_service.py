@@ -131,6 +131,7 @@ class ExtractionService:
             raw_input_json = task.raw_input_json
             file_paths_str = task.file_paths
             mail_subject = task.mail_subject
+            recognition_mode = task.recognition_mode or "standard"
 
             # If tenant_secret wasn't passed, look it up from API key
             if not tenant_secret:
@@ -151,8 +152,14 @@ class ExtractionService:
             # database-backed model settings before both text and file tasks.
             # Production uses immutable deployment environment and this is a no-op.
             await VisionService.refresh_runtime_settings()
+            vision_report = {"pages_total": 0, "pages_processed": 0, "duration_ms": 0}
             if input_type == "FILE" and file_paths_str:
-                vision_budget = VisionBudget(settings.VISION_MAX_IMAGES_PER_TASK)
+                max_vision_attempts = (
+                    settings.HIGH_ACCURACY_MAX_PAGES
+                    if recognition_mode == "high_accuracy"
+                    else settings.VISION_MAX_IMAGES_PER_TASK
+                )
+                vision_budget = VisionBudget(max_vision_attempts)
                 stored_paths = json.loads(file_paths_str)
                 if not isinstance(stored_paths, list) or len(stored_paths) > settings.MAX_UPLOAD_FILES:
                     raise ValueError("Invalid stored upload path list")
@@ -170,6 +177,8 @@ class ExtractionService:
                     body="",
                     temp_dir=settings.uploads_path,
                     vision_budget=vision_budget,
+                    recognition_mode=recognition_mode,
+                    vision_report=vision_report,
                 )
             else:
                 raw_dict = json.loads(raw_input_json or "{}")
@@ -220,6 +229,9 @@ class ExtractionService:
                 current_task.status = "SUCCESS"
                 current_task.result_json = json.dumps(final_v3_json, ensure_ascii=False)
                 current_task.duration_ms = duration_ms
+                current_task.vision_pages_total = vision_report["pages_total"]
+                current_task.vision_pages_processed = vision_report["pages_processed"]
+                current_task.vision_duration_ms = vision_report["duration_ms"] or None
                 current_task.completed_at = utc_now()
                 current_task.lease_owner = None
                 current_task.lease_expires_at = None
@@ -242,6 +254,12 @@ class ExtractionService:
                             "status": "SUCCESS",
                             "duration_ms": duration_ms,
                             "charged_amount": float(current_task.charged_amount),
+                            "recognition": {
+                                "mode": recognition_mode,
+                                "pages_total": current_task.vision_pages_total,
+                                "pages_processed": current_task.vision_pages_processed,
+                                "duration_ms": current_task.vision_duration_ms,
+                            },
                             "data": final_v3_json,
                             "error": None,
                             "timestamp": int(time.time() * 1000),
@@ -307,6 +325,9 @@ class ExtractionService:
                     current_task.status = "FAILED"
                     current_task.error_message = err_msg
                     current_task.duration_ms = duration_ms
+                    current_task.vision_pages_total = vision_report.get("pages_total", 0)
+                    current_task.vision_pages_processed = vision_report.get("pages_processed", 0)
+                    current_task.vision_duration_ms = vision_report.get("duration_ms") or None
                     current_task.completed_at = utc_now()
                     current_task.lease_owner = None
                     current_task.lease_expires_at = None

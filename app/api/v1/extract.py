@@ -5,7 +5,7 @@ import json
 import logging
 from pathlib import Path
 import time
-from typing import List, Optional
+from typing import List, Literal, Optional
 import uuid
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile, status
 from sqlalchemy import func, select
@@ -130,7 +130,20 @@ def async_task_response(task: EmailTask, *, duplicate: bool = False) -> TaskAsyn
         task_id=task.id,
         status=task.status,
         created_at=task.created_at,
+        recognition_mode=task.recognition_mode or "standard",
     )
+
+
+def ensure_idempotent_mode(task: EmailTask, requested_mode: str) -> None:
+    existing_mode = task.recognition_mode or "standard"
+    if existing_mode != requested_mode:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": 40902,
+                "message": "同一 Idempotency-Key 不能用于不同识别模式，请更换该请求头后重试",
+            },
+        )
 
 
 @router.post(
@@ -149,6 +162,7 @@ async def extract_async_json(
     idempotency_key = normalize_idempotency_key(idempotency_key)
     existing_task = await find_idempotent_task(db, tenant.id, idempotency_key)
     if existing_task:
+        ensure_idempotent_mode(existing_task, "standard")
         return async_task_response(existing_task, duplicate=True)
     await validate_callback_url(request.callback_url)
     await enforce_queue_capacity(db, tenant.id)
@@ -175,6 +189,7 @@ async def extract_async_json(
         callback_status="PENDING" if request.callback_url else "NONE",
         reserved_amount=reserved_amount,
         is_reserved=True,
+        recognition_mode="standard",
     )
     db.add(task)
     try:
@@ -215,16 +230,22 @@ async def extract_async_upload(
     files: List[UploadFile] = File(..., description="上传的文件列表（支持 .eml, .pdf, .xlsx, .xls, .docx, .doc, 图片等）"),
     mail_subject: Optional[str] = Form("", description="可选补充的邮件主题"),
     callback_url: Optional[str] = Form(None, description="Webhook 回调地址"),
+    recognition_mode: Literal["standard", "high_accuracy"] = Form(
+        "standard",
+        description="识别模式：standard 标准解析；high_accuracy 对 PDF 每页和图片强制使用视觉模型",
+    ),
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     tenant_info: tuple[Tenant, ApiKey] = Depends(get_current_tenant_and_key),
     db: AsyncSession = Depends(get_db),
 ):
     tenant, api_key = tenant_info
+    recognition_mode = recognition_mode if isinstance(recognition_mode, str) else "standard"
     tenant_id = tenant.id
     api_key_id = api_key.id if not api_key.id.startswith("admin_virtual_key_") else None
     idempotency_key = normalize_idempotency_key(idempotency_key)
     existing_task = await find_idempotent_task(db, tenant_id, idempotency_key)
     if existing_task:
+        ensure_idempotent_mode(existing_task, recognition_mode)
         for upload in files:
             await upload.close()
         return async_task_response(existing_task, duplicate=True)
@@ -327,7 +348,10 @@ async def extract_async_upload(
                 logger.warning("Failed to remove partial upload %s", saved_path)
         raise
 
-    summary = f"上传文件数: {len(saved_file_paths)} ({', '.join(Path(f.filename or 'file').name for f in files)})"
+    summary = (
+        f"上传文件数: {len(saved_file_paths)} ({', '.join(Path(f.filename or 'file').name for f in files)}), "
+        f"识别模式: {recognition_mode}"
+    )
 
 
     task = EmailTask(
@@ -341,6 +365,7 @@ async def extract_async_upload(
         file_paths=json.dumps(saved_file_paths, ensure_ascii=False),
         callback_url=callback_url,
         callback_status="PENDING" if callback_url else "NONE",
+        recognition_mode=recognition_mode,
     )
     try:
         reserved_amount = await reserve_or_raise(db, tenant_id)
@@ -422,6 +447,7 @@ async def extract_sync(
             raw_input_json=json.dumps(payload.model_dump(), ensure_ascii=False),
             reserved_amount=reserved_amount,
             is_reserved=True,
+            recognition_mode="standard",
         )
         db.add(task)
         try:

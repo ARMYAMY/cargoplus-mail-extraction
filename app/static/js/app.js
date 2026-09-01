@@ -1756,6 +1756,11 @@ MEAS: 68.000 CBM`;
 
     const formData = new FormData();
     selectedFiles.forEach((f) => formData.append('files', f));
+    const highAccuracy = document.getElementById('wb-high-accuracy')?.checked === true;
+    formData.append('recognition_mode', highAccuracy ? 'high_accuracy' : 'standard');
+    statusElem.textContent = highAccuracy
+      ? '⏳ 已启用高精度视觉识别，正在上传并逐页处理...'
+      : '⏳ 上传单证文件并解析中...';
 
     const selectedTenantId = document.getElementById('wb-select-key-file').value;
     const headers = {};
@@ -1779,7 +1784,7 @@ MEAS: 68.000 CBM`;
 
       const submitData = await res.json();
       const taskId = submitData.task_id;
-      statusElem.textContent = `⏳ 任务 ${taskId} 排队处理中，正在轮询状态...`;
+      statusElem.textContent = `⏳ 任务 ${taskId} 排队处理中 · ${highAccuracy ? '高精度视觉模式' : '标准模式'}...`;
 
       // Poll task result
       let attempts = 0;
@@ -1793,7 +1798,10 @@ MEAS: 68.000 CBM`;
           if (task && (task.status === 'SUCCESS' || task.status === 'FAILED')) {
             clearInterval(pollInterval);
             if (task.status === 'SUCCESS') {
-              statusElem.innerHTML = `✅ 抽取成功 · 耗时: <strong>${task.duration_ms} ms</strong> · 扣费: <strong class="text-danger">¥${parseFloat(task.charged_amount).toFixed(2)}</strong>`;
+              const visionDetail = task.recognition_mode === 'high_accuracy'
+                ? ` · 视觉页: <strong>${task.vision_pages_processed || 0}/${task.vision_pages_total || 0}</strong>`
+                : '';
+              statusElem.innerHTML = `✅ 抽取成功 · ${task.recognition_mode === 'high_accuracy' ? '高精度视觉模式' : '标准模式'}${visionDetail} · 耗时: <strong>${task.duration_ms} ms</strong> · 扣费: <strong class="text-danger">¥${parseFloat(task.charged_amount).toFixed(2)}</strong>`;
               jsonElem.textContent = JSON.stringify(task.result_json, null, 2);
             } else {
               statusElem.innerHTML = `<span class="text-danger">❌ 抽取失败: ${escapeHtml(task.error_message || '未知错误')}</span>`;

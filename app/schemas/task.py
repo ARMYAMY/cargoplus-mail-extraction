@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -56,6 +56,7 @@ class TaskAsyncResponse(BaseModel):
     task_id: str
     status: str
     created_at: datetime
+    recognition_mode: Literal["standard", "high_accuracy"] = "standard"
 
 
 class TaskFeedbackSummary(BaseModel):
@@ -94,6 +95,10 @@ class TaskDetailResponse(BaseModel):
     reserved_amount: Decimal
     is_reserved: bool
     duration_ms: Optional[int]
+    recognition_mode: Literal["standard", "high_accuracy"] = "standard"
+    vision_pages_total: int = 0
+    vision_pages_processed: int = 0
+    vision_duration_ms: Optional[int] = None
     callback_url: Optional[str]
     callback_status: str
     created_at: datetime

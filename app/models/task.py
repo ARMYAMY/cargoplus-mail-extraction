@@ -34,6 +34,10 @@ class EmailTask(Base):
     raw_input_json = Column(Text, nullable=True)  # JSON string of structured input
     result_json = Column(Text, nullable=True)     # JSON string of final V3 output
     error_message = Column(Text, nullable=True)
+    recognition_mode = Column(String(32), nullable=False, default="standard")
+    vision_pages_total = Column(Integer, nullable=False, default=0)
+    vision_pages_processed = Column(Integer, nullable=False, default=0)
+    vision_duration_ms = Column(Integer, nullable=True)
     
     # Financial fields
     charged_amount = Column(Numeric(10, 4), nullable=False, default=Decimal("0.0000"))

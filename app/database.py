@@ -84,6 +84,10 @@ async def init_db():
                 "lease_owner": "ALTER TABLE email_tasks ADD COLUMN lease_owner VARCHAR(128)",
                 "lease_expires_at": "ALTER TABLE email_tasks ADD COLUMN lease_expires_at DATETIME",
                 "attempt_count": "ALTER TABLE email_tasks ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0",
+                "recognition_mode": "ALTER TABLE email_tasks ADD COLUMN recognition_mode VARCHAR(32) NOT NULL DEFAULT 'standard'",
+                "vision_pages_total": "ALTER TABLE email_tasks ADD COLUMN vision_pages_total INTEGER NOT NULL DEFAULT 0",
+                "vision_pages_processed": "ALTER TABLE email_tasks ADD COLUMN vision_pages_processed INTEGER NOT NULL DEFAULT 0",
+                "vision_duration_ms": "ALTER TABLE email_tasks ADD COLUMN vision_duration_ms INTEGER",
             }
             for column_name, statement in sqlite_task_migrations.items():
                 if column_name not in task_column_names:
@@ -282,6 +286,10 @@ async def init_db():
                 "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS lease_owner VARCHAR(128);",
                 "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;",
                 "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;",
+                "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS recognition_mode VARCHAR(32) NOT NULL DEFAULT 'standard';",
+                "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS vision_pages_total INTEGER NOT NULL DEFAULT 0;",
+                "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS vision_pages_processed INTEGER NOT NULL DEFAULT 0;",
+                "ALTER TABLE email_tasks ADD COLUMN IF NOT EXISTS vision_duration_ms INTEGER;",
                 "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS feedback_id VARCHAR(64) "
                 "REFERENCES task_feedbacks(id) ON DELETE SET NULL;",
                 "ALTER TABLE few_shot_examples ADD COLUMN IF NOT EXISTS source_tenant_id VARCHAR(64) "

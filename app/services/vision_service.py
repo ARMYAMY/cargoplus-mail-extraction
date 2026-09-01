@@ -22,10 +22,15 @@ MAX_VISION_OUTPUT_CHARS = 20_000
 VISION_MAX_TOKENS = 4096
 DEFAULT_VISION_BUDGET_SECONDS = 120.0
 
+
+class HighAccuracyVisionError(RuntimeError):
+    """Raised when explicitly requested remote visual recognition cannot complete."""
+
 DEFAULT_VISION_PROMPT = (
     "你是一个专业的国际海运单证与物流发票识别引擎。"
     "请高保真识别并转写该单证图片/扫描件中的所有文字、中英文表格和印章批注。"
     "若包含集装箱列表/箱号/封条号/船名航次/提单号/收发通信息，必须转写为 Markdown 规整表格，"
+    "表格必须逐行逐列保留标签、值、空单元格与合并关系，不得按阅读习惯猜测或重新排列。"
     "务必保持数字、代码、日期的准确性，不要遗漏模糊字样。"
     "请直接输出识别转写出的单证文本内容，不要添加额外的寒暄和客套话。"
 )
@@ -306,6 +311,7 @@ class VisionService:
         custom_model: Optional[str] = None,
         custom_timeout: Optional[float] = None,
         enabled: Optional[bool] = None,
+        allow_local_fallback: bool = True,
     ) -> str:
         """
         Synchronous wrapper for document image transcription with RapidOCR fallback.
@@ -318,9 +324,13 @@ class VisionService:
 
         optimized_bytes = cls.optimize_image_for_vision(image_bytes)
         if optimized_bytes is None:
-            return ""
+            if allow_local_fallback:
+                return ""
+            raise HighAccuracyVisionError("高精度视觉识别失败：页面图像无效或超过安全大小限制")
         if not is_enabled or not api_key or not api_key.strip():
-            return cls._local_ocr(optimized_bytes)
+            if allow_local_fallback:
+                return cls._local_ocr(optimized_bytes)
+            raise HighAccuracyVisionError("高精度视觉识别不可用：请检查视觉模型开关和 API Key 配置")
 
         b64_image = base64.b64encode(optimized_bytes).decode("utf-8")
         image_data_url = f"data:image/jpeg;base64,{b64_image}"
@@ -355,12 +365,16 @@ class VisionService:
                         content = choices[0]["message"].get("content", "")
                         if content and content.strip():
                             return content.strip()[:MAX_VISION_OUTPUT_CHARS]
-                logger.warning(
-                    f"Vision API sync returned status {res.status_code}, falling back to RapidOCR"
-                )
+                if not allow_local_fallback:
+                    raise HighAccuracyVisionError(
+                        f"高精度视觉模型返回异常状态 {res.status_code}，请检查模型配置后重试"
+                    )
+                logger.warning("Vision API sync returned status %s, falling back to RapidOCR", res.status_code)
+        except HighAccuracyVisionError:
+            raise
         except Exception as exc:
-            logger.warning(
-                f"Vision transcription sync failed ({exc}), falling back to RapidOCR"
-            )
+            if not allow_local_fallback:
+                raise HighAccuracyVisionError(f"高精度视觉模型调用失败: {exc}") from exc
+            logger.warning("Vision transcription sync failed (%s), falling back to RapidOCR", exc)
 
         return cls._local_ocr(optimized_bytes)
