@@ -1,0 +1,5 @@
+# Real customer test outputs may contain sensitive business data.
+results/
+feedback-results/
+*-corrected.json
+*.inspect.ndjson
