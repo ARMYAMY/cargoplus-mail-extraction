@@ -233,6 +233,21 @@
     .badge-post { background: rgba(52, 211, 153, 0.2); color: #34d399; border: 1px solid rgba(52, 211, 153, 0.3); }
     .badge-get { background: rgba(56, 189, 248, 0.2); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); }
 
+    .notice-box {
+      margin: 18px 0;
+      padding: 16px 18px;
+      border: 1px solid rgba(56, 189, 248, 0.28);
+      border-radius: 12px;
+      background: rgba(56, 189, 248, 0.08);
+      color: rgba(255, 255, 255, 0.86);
+      line-height: 1.7;
+    }
+
+    .notice-box.warning {
+      border-color: rgba(251, 191, 36, 0.3);
+      background: rgba(251, 191, 36, 0.08);
+    }
+
     .param-table {
       width: 100%;
       border-collapse: collapse;
@@ -289,160 +304,241 @@
   <div class="docs-layout">
     <aside class="docs-sidebar">
       <div class="docs-menu-group">
-        <div class="docs-menu-title">入门指引</div>
-        <a href="#quickstart" class="docs-menu-item active">1. 快速接入指南</a>
-        <a href="#auth" class="docs-menu-item">2. 认证鉴权规范</a>
+        <div class="docs-menu-title">接入指引</div>
+        <a href="#quickstart" class="docs-menu-item active">1. 接入准备与快速验证</a>
+        <a href="#auth" class="docs-menu-item">2. API 鉴权</a>
       </div>
       <div class="docs-menu-group">
-        <div class="docs-menu-title">核心抽取 API</div>
-        <a href="#extract-async" class="docs-menu-item">3. 异步抽取 (推荐)</a>
-        <a href="#extract-sync" class="docs-menu-item">4. 同步即时抽取</a>
-        <a href="#tasks-query" class="docs-menu-item">5. 任务状态与结果查询</a>
+        <div class="docs-menu-title">抽取 API</div>
+        <a href="#file-upload" class="docs-menu-item">3. 异步文件上传</a>
+        <a href="#json-async" class="docs-menu-item">4. 异步 JSON 文本抽取</a>
+        <a href="#json-sync" class="docs-menu-item">5. 同步 JSON 抽取</a>
+        <a href="#tasks-query" class="docs-menu-item">6. 任务查询与结果读取</a>
       </div>
       <div class="docs-menu-group">
-        <div class="docs-menu-title">高可用与集成</div>
-        <a href="#webhook" class="docs-menu-item">6. Webhook 验签规范</a>
-        <a href="#fields-v3" class="docs-menu-item">7. V3 57 核心字段规范</a>
-        <a href="#status-codes" class="docs-menu-item">8. 响应状态码与异常</a>
+        <div class="docs-menu-title">集成与排障</div>
+        <a href="#webhook" class="docs-menu-item">7. Webhook 回调与验签</a>
+        <a href="#fields" class="docs-menu-item">8. 输出字段规范</a>
+        <a href="#status-codes" class="docs-menu-item">9. 状态码、重试与排障</a>
+        <a href="#full-example" class="docs-menu-item">10. 完整文件调用示例</a>
       </div>
     </aside>
 
     <main class="docs-content">
       <section class="docs-hero">
         <h1>CargoPlus 用户手册与集成指引</h1>
-        <p>CargoPlus 采用现代工业级 Skill V3 架构，为国际货运代理、无船承运人（NVOCC）及物流 ERP 系统提供高并发、高精度的邮件与附件单证结构化抽取服务。</p>
+        <p>用于将邮件正文、附件和物流单证转换为约定的结构化业务数据。本手册仅说明客户接入所需的外部接口和使用规则。</p>
+        <div class="notice-box"><strong>首次接入建议：</strong>直接查看<a href="#full-example" style="color:#ffffff; text-decoration:underline;">第 10 章</a>，从上传文件到获取结果完整走一遍。</div>
       </section>
 
-      <!-- 1. 快速接入指南 -->
       <section class="docs-section" id="quickstart">
-        <h2>1. 快速接入指南</h2>
-        <p>仅需三步即可完成生产环境对接：</p>
-        <ol>
-          <li><strong>注册开户</strong>：访问 <a href="/register" style="color:#ffffff; text-decoration:underline;">企业开户页面</a> 提交申请，获取唯一的 <code>API Key</code> 与 <code>Webhook Secret</code>；</li>
-          <li><strong>提交抽取</strong>：向 <code>/api/v1/extract/async</code> 或 <code>/api/v1/extract/async/upload</code> 提交订舱确认邮件正文或多模态附件（支持 <strong>.eml, .pdf, .xlsx, .xls, .docx, .doc, 扫描图片</strong> 等单证）。文件上传接口可增加表单字段 <code>recognition_mode=high_accuracy</code>，对 PDF 每页及图片强制使用高精度视觉识别；不传或传 <code>standard</code> 时保持原标准流程。</li>
-          <li><strong>接收通知</strong>：配置回调地址 <code>callback_url</code>，抽取成功后系统将自动以 HMAC-SHA256 签名方式将 57 个标准结构化字段推送到您的业务系统。</li>
-        </ol>
+        <h2>1. 接入准备与快速验证</h2>
+        <p>当前客户测试环境 Base URL：<code>http://115.29.213.72:30010</code>。该地址仅用于当前联调；正式环境应使用项目方提供的 HTTPS 域名。</p>
+        <p>客户需要准备 API Key；只有使用 Webhook 时才需要 Webhook Secret。两项凭据用途不同，不能互换。</p>
+        <h3>健康检查</h3>
+        <div class="code-block"><pre><code>curl "http://115.29.213.72:30010/health/ready"</code></pre></div>
+        <p>准备就绪时返回 HTTP 200，且 <code>status=ready</code>、<code>database=ok</code>、<code>queue=ok</code>。</p>
+        <div class="notice-box warning"><strong>安全提示：</strong>当前测试地址暂使用 HTTP，只应使用测试专用 API Key、脱敏样本和可信电脑。不要在邮件、聊天、截图、代码仓库或日志中保存完整凭据。</div>
       </section>
 
-      <!-- 2. 认证鉴权规范 -->
       <section class="docs-section" id="auth">
-        <h2>2. 认证鉴权规范</h2>
-        <p>所有客户端调用需在 HTTP 请求头中携带企业 API Key：</p>
-        <div class="code-block">
-          <pre><code>Authorization: Bearer cg_live_xxxxxxxx_yyyyyyyyyyyyyyyyyyyyyyyy</code></pre>
-        </div>
-        <p>或通过自定义 Header 传入：</p>
-        <div class="code-block">
-          <pre><code>X-API-Key: cg_live_xxxxxxxx_yyyyyyyyyyyyyyyyyyyyyyyy</code></pre>
-        </div>
+        <h2>2. API 鉴权</h2>
+        <p>除健康检查外，客户接口需在请求头中携带 API Key，以下两种方式任选其一：</p>
+        <div class="code-block"><pre><code>Authorization: Bearer &lt;YOUR_API_KEY&gt;</code></pre></div>
+        <div class="code-block"><pre><code>X-API-Key: &lt;YOUR_API_KEY&gt;</code></pre></div>
+        <p>鉴权成功后可查询任务列表；缺少或无效 Key 应返回 HTTP 401。</p>
       </section>
 
-      <!-- 3. 异步抽取 -->
-      <section class="docs-section" id="extract-async">
-        <h2>3. 异步邮件抽取接口 (POST /api/v1/extract/async)</h2>
-        <p>适用于生产环境 ERP 对接。系统执行原子额度预留并进入削峰队列处理。</p>
-        
-        <h3>请求体 JSON 参数：</h3>
+      <section class="docs-section" id="file-upload">
+        <h2>3. 异步文件上传（推荐）</h2>
+        <p><span class="badge-method badge-post">POST</span><code>/api/v1/extract/async/upload</code></p>
+        <p>客户直接上传原始文件，系统负责文件解析、必要的图像识别和业务字段抽取。接口立即返回 <code>task_id</code>，客户随后轮询任务或等待 Webhook。</p>
         <table class="param-table">
-          <thead>
-            <tr><th>字段名</th><th>类型</th><th>必填</th><th>说明</th></tr>
-          </thead>
+          <thead><tr><th>表单字段</th><th>必填</th><th>说明</th></tr></thead>
           <tbody>
-            <tr><td><code>mail_subject</code></td><td>string</td><td>否</td><td>邮件标题</td></tr>
-            <tr><td><code>mail_body</code></td><td>string</td><td>是</td><td>邮件正文内容（中英混排）</td></tr>
-            <tr><td><code>callback_url</code></td><td>string</td><td>否</td><td>抽取完成后的 Webhook 接收地址</td></tr>
+            <tr><td><code>files</code></td><td>是</td><td>可重复传入，表示同一业务任务的多个文件</td></tr>
+            <tr><td><code>mail_subject</code></td><td>否</td><td>邮件主题，最长 255 字符</td></tr>
+            <tr><td><code>recognition_mode</code></td><td>否</td><td><code>standard</code>（默认）或 <code>high_accuracy</code></td></tr>
+            <tr><td><code>callback_url</code></td><td>否</td><td>任务完成回调地址；正式环境必须是公网 HTTPS</td></tr>
           </tbody>
         </table>
-
-        <h3>Python 示例代码：</h3>
-        <div class="code-block">
-          <pre><code>import requests
-
-url = "http://localhost:8000/api/v1/extract/async"
-headers = {
-    "Authorization": "Bearer cg_live_your_api_key",
-    "Content-Type": "application/json",
-    "Idempotency-Key": "req_unique_id_12345"  # 防重复提交幂等键
-}
-payload = {
-    "mail_subject": "Booking Confirmation - 2x40HQ SHANGHAI TO ROTTERDAM",
-    "mail_body": "DEAR CUSTOMER, BOOKING NO: COSU638291048, VESSEL: CSCL GLOBE / 042W, POL: SHANGHAI, POD: ROTTERDAM",
-    "callback_url": "https://your-erp.com/webhooks/cargo"
-}
-
-response = requests.post(url, json=payload, headers=headers)
-print(response.json())</code></pre>
-        </div>
-      </section>
-
-      <!-- 4. 同步即时抽取 -->
-      <section class="docs-section" id="extract-sync">
-        <h2>4. 同步即时抽取接口 (POST /api/v1/extract/sync)</h2>
-        <p>客户端阻塞等待抽取完成并直接返回 57 字段规范 JSON（包含实际生效的模型 <code>model_used</code> 与耗时 <code>duration_ms</code>）。</p>
-      </section>
-
-      <!-- 5. 任务查询 -->
-      <section class="docs-section" id="tasks-query">
-        <h2>5. 任务状态与结果查询 (GET /api/v1/tasks/{task_id})</h2>
-        <p>若未使用 Webhook，客户端可轮询查询任务的实时状态与抽取详情。</p>
-      </section>
-
-      <!-- 6. Webhook 验签规范 -->
-      <section class="docs-section" id="webhook">
-        <h2>6. Webhook 签名校验规范 (HMAC-SHA256)</h2>
-        <p>为防止重放攻击与伪造通知，系统在推送结果时会附带签名 Header：</p>
-        <div class="code-block">
-          <pre><code>X-Timestamp: 1724064600000
-X-Signature-SHA256: d5a4e6b2c86472...</code></pre>
-        </div>
-
-        <h3>Python 验签函数：</h3>
-        <div class="code-block">
-          <pre><code>import hmac
-import hashlib
-import time
-
-def verify_webhook(raw_body_bytes: bytes, timestamp_str: str, signature_header: str, tenant_secret: str) -> bool:
-    # 1. 防重放攻击 (偏差不超过 5 分钟)
-    if abs(int(time.time() * 1000) - int(timestamp_str)) > 300_000:
-        return False
-    # 2. 计算签名: HMAC_SHA256(secret, timestamp + "." + body)
-    message = f"{timestamp_str}.".encode("utf-8") + raw_body_bytes
-    expected_sig = hmac.new(tenant_secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
-    # 3. 恒定时间比对
-    return hmac.compare_digest(expected_sig, signature_header)</code></pre>
-        </div>
-      </section>
-
-      <!-- 7. V3 57 核心字段规范 -->
-      <section class="docs-section" id="fields-v3">
-        <h2>7. V3 57 核心字段规范概览</h2>
-        <p>系统自动识别并归一化海运订舱核心要素：</p>
+        <h3>支持格式与限制</h3>
+        <p><code>.eml</code>、<code>.pdf</code>、<code>.xlsx</code>、<code>.xls</code>、<code>.docx</code>、<code>.doc</code>、<code>.jpg</code>、<code>.jpeg</code>、<code>.png</code>、<code>.bmp</code>、<code>.webp</code>、<code>.tiff</code>、<code>.txt</code>、<code>.csv</code>、<code>.json</code>、<code>.md</code>。</p>
+        <table class="param-table">
+          <thead><tr><th>限制</th><th>当前值</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td>单次文件数</td><td>最多 10 个</td><td>同一业务的邮件和附件可作为一个任务</td></tr>
+            <tr><td>普通单文件</td><td>最大 50MB</td><td>超出时拆分或压缩</td></tr>
+            <tr><td>旧版 <code>.doc</code></td><td>最大 20MB</td><td>建议优先转为 <code>.docx</code></td></tr>
+            <tr><td>单次文件总量</td><td>最大 100MB</td><td>超出时拆分为多个任务</td></tr>
+            <tr><td>PDF 页数</td><td>最多处理 20 页</td><td>高精度模式超限会失败；标准模式仅处理前 20 页</td></tr>
+          </tbody>
+        </table>
+        <h3>识别模式</h3>
         <ul>
-          <li><strong>订舱与船期</strong>：<code>BookingNo</code>, <code>Carrier</code>, <code>Vessel</code>, <code>Voyage</code>, <code>SO</code>, <code>ETD</code>, <code>ETA</code>, <code>ClosingDate</code>, <code>CutOffDate</code> 等；</li>
-          <li><strong>港口代码</strong>：<code>POL</code> (五字码如 CNSHA), <code>POLName</code>, <code>POD</code> (如 NLRTM), <code>PODName</code>, <code>TransitPort</code>；</li>
-          <li><strong>集装箱与箱型</strong>：<code>ContainerInfo</code> (数组包含 <code>ContainerNo</code>, <code>ContSize</code>: 20/40/45, <code>ContType</code>: GP/HQ/NOR/RF, <code>SealNo</code>)；</li>
-          <li><strong>件重体分离</strong>：<code>Packages</code>, <code>PackagesUnit</code>, <code>GrossWeight</code>, <code>GrossWeightUnit</code>, <code>Volume</code>, <code>VolumeUnit</code>；</li>
-          <li><strong>收发通实体</strong>：<code>Shipper</code>, <code>ShipperAddr</code>, <code>Consignee</code>, <code>ConsigneeAddr</code>, <code>NotifyParty</code>, <code>NotifyPartyAddr</code>；</li>
-          <li><strong>品名拆分</strong>：<code>GoodsName</code> (英文品名), <code>GoodsNameCN</code> (中文品名)。</li>
+          <li><code>standard</code>：适合可复制文字 PDF、Excel、Word 和其他正文清晰文件，通常速度更快。</li>
+          <li><code>high_accuracy</code>：适合扫描 PDF、独立图片和 Word 内嵌截图。Excel、Word 正文和表格仍按标准方式解析，处理时间通常更长。</li>
+        </ul>
+        <div class="notice-box">同一个 <code>Idempotency-Key</code> 用于同一次业务请求的安全重试。不同文件、不同业务或不同识别模式必须使用新键。</div>
+      </section>
+
+      <section class="docs-section" id="json-async">
+        <h2>4. 异步 JSON 文本抽取</h2>
+        <p><span class="badge-method badge-post">POST</span><code>/api/v1/extract/async</code></p>
+        <p>适用于客户系统已经完成邮件正文、OCR 或附件表格解析的场景。该接口接收预解析文本，不接收 Base64 原始文件，也不使用 <code>high_accuracy</code>。</p>
+        <table class="param-table">
+          <thead><tr><th>JSON 字段</th><th>必填</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>mail_subject</code></td><td>否</td><td>邮件主题，最长 255 字符</td></tr>
+            <tr><td><code>mail_body</code></td><td>条件必填</td><td>与 <code>attachments</code> 至少一项包含有效内容</td></tr>
+            <tr><td><code>attachments</code></td><td>条件必填</td><td>预解析附件数组，最多 10 项</td></tr>
+            <tr><td><code>callback_url</code></td><td>否</td><td>公网 HTTPS 回调地址</td></tr>
+          </tbody>
+        </table>
+        <div class="code-block"><pre><code>{
+  "mail_subject": "Booking Confirmation",
+  "mail_body": "POL: YANTIAN\nPOD: MELBOURNE\nBOOKING NO: BK123456",
+  "attachments": []
+}</code></pre></div>
+      </section>
+
+      <section class="docs-section" id="json-sync">
+        <h2>5. 同步 JSON 抽取</h2>
+        <p><span class="badge-method badge-post">POST</span><code>/api/v1/extract/sync</code></p>
+        <p>请求会等待抽取完成后直接返回结果，只建议用于小规模文本联调。请求字段与异步 JSON 基本一致，但不包含 <code>callback_url</code>。</p>
+        <p>同步成功时业务结果从 <code>data</code> 读取；如返回超时且附带 <code>task_id</code>，应先查询该任务，不要立即重复创建。</p>
+      </section>
+
+      <section class="docs-section" id="tasks-query">
+        <h2>6. 任务查询与结果读取</h2>
+        <p><span class="badge-method badge-get">GET</span><code>/api/v1/tasks/{task_id}</code></p>
+        <table class="param-table">
+          <thead><tr><th>状态</th><th>含义</th><th>客户端处理</th></tr></thead>
+          <tbody>
+            <tr><td><code>PENDING</code></td><td>已接收，等待处理</td><td>约 3 秒后再查</td></tr>
+            <tr><td><code>PROCESSING</code></td><td>正在解析或抽取</td><td>继续等待，不要高频请求</td></tr>
+            <tr><td><code>SUCCESS</code></td><td>处理成功</td><td>异步任务从 <code>result_json</code> 读取结果</td></tr>
+            <tr><td><code>FAILED</code></td><td>处理失败</td><td>读取 <code>error_message</code> 并根据原因处理</td></tr>
+          </tbody>
+        </table>
+        <p>同步接口从 <code>data</code> 读取结果，异步任务查询从 <code>result_json</code> 读取结果，两条路径不能混用。</p>
+      </section>
+
+      <section class="docs-section" id="webhook">
+        <h2>7. Webhook 回调与验签</h2>
+        <p>配置 <code>callback_url</code> 后，任务成功或失败时系统会主动通知客户服务。正式环境只接受可从公网解析和访问的 HTTPS 地址；<code>localhost</code>、环回地址和内网 IP 会被拒绝。</p>
+        <div class="code-block"><pre><code>X-Timestamp: 1788391200000
+X-Signature-SHA256: &lt;64 位十六进制签名&gt;</code></pre></div>
+        <p>签名原文为 <code>timestamp + "." + 原始 HTTP 请求体字节</code>，算法为 HMAC-SHA256。必须保存原始 body 后再解析 JSON，不能将 JSON 重新序列化后验签。</p>
+        <ul>
+          <li>建议拒绝时间偏差超过 5 分钟的通知。</li>
+          <li>同一 <code>task_id</code> 重复到达时返回 2xx，但业务动作只执行一次。</li>
+          <li>Webhook Secret 只保存在客户回调服务端，不能当作 API Key 使用。</li>
         </ul>
       </section>
 
-      <!-- 8. 状态码说明 -->
-      <section class="docs-section" id="status-codes">
-        <h2>8. 常见响应状态码与错误处理</h2>
+      <section class="docs-section" id="fields">
+        <h2>8. 输出字段规范</h2>
+        <p>成功结果包含 57 个顶层字段，<code>ContainerInfo</code> 为箱明细数组。字段名区分大小写，客户端应允许空字符串、空数组并忽略未来可能增加的未知字段，不应依赖 JSON 字段顺序。</p>
         <table class="param-table">
-          <thead>
-            <tr><th>HTTP 状态码</th><th>错误场景</th><th>解决指引</th></tr>
-          </thead>
+          <thead><tr><th>分类</th><th>字段</th></tr></thead>
           <tbody>
-            <tr><td><code>200 OK</code></td><td>请求成功</td><td>正常获取任务 ID 或抽取结果</td></tr>
-            <tr><td><code>401 Unauthorized</code></td><td>API Key 无效或未提供</td><td>检查请求头中的 <code>Authorization: Bearer &lt;key&gt;</code></td></tr>
-            <tr><td><code>402 Payment Required</code></td><td>账户可用余额不足</td><td>请联系管理员为企业充值或充值后重试</td></tr>
-            <tr><td><code>403 Forbidden</code></td><td>租户处于待审核或已禁用</td><td>待管理员在控制台审核激活后即可调用</td></tr>
-            <tr><td><code>429 Too Many Requests</code></td><td>超出并发限制</td><td>系统已返回 <code>Retry-After</code>，建议 1~3 秒后自动重试</td></tr>
+            <tr><td>收发通</td><td><code>ShipperName</code>, <code>ShipperAddr</code>, <code>ShipperTel</code>, <code>ShipperEmail</code>, <code>ShipperFax</code>, <code>ConsigneeName</code>, <code>ConsigneeAddr</code>, <code>ConsigneeTel</code>, <code>ConsigneeEmail</code>, <code>ConsigneeFax</code>, <code>NotifyName</code>, <code>NotifyAddr</code>, <code>NotifyTel</code>, <code>NotifyEmail</code>, <code>NotifyFax</code></td></tr>
+            <tr><td>港口与地点</td><td><code>POR</code>, <code>PORName</code>, <code>POL</code>, <code>POLName</code>, <code>POD</code>, <code>PODName</code>, <code>TransPort</code>, <code>DeliveryCode</code>, <code>DeliveryName</code></td></tr>
+            <tr><td>船期与航次</td><td><code>ETD</code>, <code>ETA</code>, <code>Vessel</code>, <code>Voyage</code>, <code>CutOffDate</code>, <code>SICutOff</code></td></tr>
+            <tr><td>箱货与总计</td><td><code>ContainerInfo</code>, <code>TotalContainerQty</code>, <code>GoodsName</code>, <code>GoodsNameCN</code>, <code>Marks</code>, <code>HSCode</code>, <code>Packages</code>, <code>PackagesUnit</code>, <code>GrossWeight</code>, <code>GrossWeightUnit</code>, <code>NetWeight</code>, <code>NetWeightUnit</code>, <code>Volume</code>, <code>VolumeUnit</code></td></tr>
+            <tr><td>条款与单证</td><td><code>Incoterms</code>, <code>Movement</code>, <code>PackingMode</code>, <code>GoodsType</code>, <code>FreightTerm</code>, <code>Carrier</code>, <code>IsTrucking</code>, <code>IsCustomsDeclare</code>, <code>ReleaseBLType</code>, <code>BookingNo</code>, <code>BLNo</code>, <code>ContractNo</code>, <code>Remark</code></td></tr>
           </tbody>
         </table>
+        <p><code>ContainerInfo</code> 每个对象包含 13 个字段：<code>ContainerNo</code>, <code>SealNo</code>, <code>ContSize</code>, <code>ContType</code>, <code>KGS</code>, <code>KGSunit</code>, <code>PCS</code>, <code>Package</code>, <code>CBM</code>, <code>CBMunit</code>, <code>HSCode</code>, <code>GoodsName</code>, <code>GoodsNameCN</code>。</p>
+        <div class="notice-box warning">没有明确箱明细时必须返回 <code>ContainerInfo=[]</code>，不能返回只包含空字段的箱对象。如果除默认 <code>GoodsType="S"</code> 外其他字段均为空，任务应标记为 <code>FAILED</code>，并提示“模型返回空提取结果”。</div>
+      </section>
+
+      <section class="docs-section" id="status-codes">
+        <h2>9. 状态码、重试与排障</h2>
+        <table class="param-table">
+          <thead><tr><th>HTTP / 业务码</th><th>场景</th><th>处理</th></tr></thead>
+          <tbody>
+            <tr><td><code>200</code></td><td>请求成功或任务已接收</td><td>异步返回 200 不代表任务已完成，继续查询状态</td></tr>
+            <tr><td><code>401</code></td><td>API Key 缺失、无效或停用</td><td>检查鉴权请求头，不要原样重试</td></tr>
+            <tr><td><code>402 / 40201</code></td><td>可用余额不足</td><td>联系项目方处理后重试</td></tr>
+            <tr><td><code>409 / 40902</code></td><td>同一幂等键用于不同识别模式</td><td>为新请求生成新键</td></tr>
+            <tr><td><code>413 / 41301-41303</code></td><td>单文件、文件数或总量超限</td><td>压缩、转换或拆分文件</td></tr>
+            <tr><td><code>415 / 41501</code></td><td>文件扩展名不支持</td><td>转换为支持的格式</td></tr>
+            <tr><td><code>422 / 42201</code></td><td><code>callback_url</code> 不安全</td><td>使用可公网访问的 HTTPS 地址</td></tr>
+            <tr><td><code>429</code></td><td>待处理任务达到上限</td><td>遵循 <code>Retry-After</code> 延后重试</td></tr>
+            <tr><td><code>503 / 50301</code></td><td>任务已保存但队列暂不可用</td><td>保留 <code>task_id</code> 和原幂等键，稍后查询或安全重试</td></tr>
+            <tr><td><code>504 / 50401</code></td><td>同步等待超时</td><td>先查询返回的 <code>task_id</code>，不要重复创建</td></tr>
+          </tbody>
+        </table>
+        <p>空结果排查顺序：确认文件可打开且包含业务内容 → 查看 <code>status</code> 和 <code>error_message</code> → 扫描 PDF 或图片改用 <code>high_accuracy</code> → 使用新幂等键重试。</p>
+      </section>
+
+      <section class="docs-section" id="full-example">
+        <h2>10. 完整文件调用示例（Windows PowerShell）</h2>
+        <p>以下流程完成：健康检查 → 安全输入 API Key → 上传文件 → 轮询任务 → 保存抽取结果。</p>
+        <h3>10.1 设置参数</h3>
+        <div class="code-block"><pre><code>$baseUrl = "http://115.29.213.72:30010"
+$filePath = "C:\CargoPlusTest\sample.pdf"
+$recognitionMode = "standard"  # 扫描件可改为 high_accuracy
+
+if (-not (Test-Path -LiteralPath $filePath)) {
+    throw "找不到测试文件：$filePath"
+}
+
+$secureKey = Read-Host "请输入测试 API Key（输入内容不会显示）" -AsSecureString
+$apiKey = [System.Net.NetworkCredential]::new("", $secureKey).Password
+$headers = @{ "Authorization" = "Bearer $apiKey" }</code></pre></div>
+        <h3>10.2 健康检查</h3>
+        <div class="code-block"><pre><code>$health = Invoke-RestMethod -Method Get -Uri "$baseUrl/health/ready"
+$health | ConvertTo-Json -Depth 10
+if ($health.status -ne "ready") { throw "服务尚未就绪" }</code></pre></div>
+        <h3>10.3 上传文件</h3>
+        <div class="code-block"><pre><code>$idempotencyKey = [guid]::NewGuid().ToString()
+$curlArguments = @(
+    "-sS", "-X", "POST",
+    "$baseUrl/api/v1/extract/async/upload",
+    "-H", "Authorization: Bearer $apiKey",
+    "-H", "Idempotency-Key: $idempotencyKey",
+    "-F", "files=@$filePath",
+    "-F", "mail_subject=客户API文件抽取测试",
+    "-F", "recognition_mode=$recognitionMode"
+)
+$submitRaw = &amp; curl.exe @curlArguments
+if ($LASTEXITCODE -ne 0) { throw "文件上传失败，curl退出码：$LASTEXITCODE" }
+$submitResult = $submitRaw | ConvertFrom-Json
+if (-not $submitResult.task_id) { throw "服务器没有返回 task_id：$submitRaw" }
+$taskId = $submitResult.task_id
+Write-Host "任务编号：" $taskId
+Write-Host "初始状态：" $submitResult.status</code></pre></div>
+        <h3>10.4 轮询直到完成</h3>
+        <div class="code-block"><pre><code>$maximumWaitSeconds = 900
+$stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+do {
+    $task = Invoke-RestMethod -Method Get `
+        -Uri "$baseUrl/api/v1/tasks/$taskId" -Headers $headers
+    Write-Host "当前状态：" $task.status
+    if ($task.status -in @("PENDING", "PROCESSING")) { Start-Sleep -Seconds 3 }
+    if ($stopwatch.Elapsed.TotalSeconds -ge $maximumWaitSeconds) {
+        throw "等待超时，请保留任务编号：$taskId"
+    }
+} while ($task.status -in @("PENDING", "PROCESSING"))
+$stopwatch.Stop()</code></pre></div>
+        <h3>10.5 读取并保存结果</h3>
+        <div class="code-block"><pre><code>if ($task.status -eq "SUCCESS") {
+    $resultText = $task.result_json | ConvertTo-Json -Depth 30
+    $outputPath = Join-Path ([Environment]::GetFolderPath("Desktop")) `
+        "CargoPlus-$taskId-result.json"
+    $resultText | Set-Content -LiteralPath $outputPath -Encoding UTF8
+    Write-Output $resultText
+    Write-Host "结果已保存到：$outputPath"
+} elseif ($task.status -eq "FAILED") {
+    Write-Host "识别失败，任务编号：" $task.id
+    Write-Host "失败原因：" $task.error_message
+} else {
+    Write-Host "未知任务状态：" $task.status
+}</code></pre></div>
+        <div class="notice-box"><code>PENDING</code> 只表示任务已接收，不代表抽取完成。标准模式下 <code>vision_pages_processed=0</code> 可能是正常情况：系统可以先读取 PDF 文字，再进行业务字段抽取，不一定需要视觉识别。</div>
       </section>
     </main>
   </div>
