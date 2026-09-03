@@ -2,6 +2,9 @@
 	# Keep the admin API inside the Caddy container so future config changes can
 	# use graceful reloads. Port 2019 is not published by Docker Compose.
 	admin localhost:2019
+	# Most clients omit SNI when the URL host is an IP address. Select the IP
+	# certificate explicitly for those otherwise-valid TLS handshakes.
+	default_sni {$PUBLIC_HOST}
 	auto_https disable_redirects
 }
 
