@@ -11,6 +11,7 @@ ENV_FILE="$CLOUD_DIR/.env"
 STATE_DIR="/opt/cargoplus"
 BACKUP_DIR="$STATE_DIR/backups"
 CA_EXPORT="$STATE_DIR/caddy-root.crt"
+CA_FINGERPRINT="$STATE_DIR/caddy-root.crt.sha256"
 CREDENTIALS_FILE="$STATE_DIR/admin-credentials.txt"
 TRIVY_CACHE_DIR="$STATE_DIR/trivy-cache"
 
@@ -243,7 +244,7 @@ prepare_configuration() {
   fi
   find "$SECRETS_DIR" -maxdepth 1 -type f -exec chmod 0644 {} +
 
-  local llm_base_url llm_model template
+  local llm_base_url llm_model template public_url cors_allowed_origins
   llm_base_url="${LLM_BASE_URL:-https://api.senseaudio.cn/v1}"
   [[ "$llm_base_url" == https://* ]] || die "LLM_BASE_URL must use HTTPS"
   llm_model="${LLM_MODEL:-senseaudio-s2}"
@@ -253,12 +254,19 @@ prepare_configuration() {
   [ -f "$template" ] || die "missing Caddy template: $template"
   install -m 0600 "$template" "$CLOUD_DIR/Caddyfile.active"
 
+  if [ "$TLS_MODE" = "ip" ]; then
+    public_url="https://$PUBLIC_HOST_INPUT:30010"
+  else
+    public_url="https://$PUBLIC_HOST_INPUT"
+  fi
+  cors_allowed_origins="$public_url"
+
   cat >"$ENV_FILE" <<EOF
 PUBLIC_HOST=$PUBLIC_HOST_INPUT
 APP_PORT=30010
 TLS_MODE=$TLS_MODE
 ACME_EMAIL=${ACME_EMAIL:-}
-CORS_ALLOWED_ORIGINS=http://$PUBLIC_HOST_INPUT:30010,https://$PUBLIC_HOST_INPUT:30010,http://localhost:30010
+CORS_ALLOWED_ORIGINS=$cors_allowed_origins
 ALLOWED_HOSTS=$PUBLIC_HOST_INPUT,api,localhost,127.0.0.1
 CLOUD_BACKUP_DIR=$BACKUP_DIR
 CARGOPLUS_IMAGE=cargoplus-app:cloud
@@ -292,7 +300,7 @@ EOF
   chmod 0600 "$ENV_FILE"
 
   cat >"$CREDENTIALS_FILE" <<EOF
-CargoPlus URL: http://$PUBLIC_HOST_INPUT:30010/
+CargoPlus URL: $public_url/
 Admin username: admin
 Admin password: $(tr -d '\r\n' <"$SECRETS_DIR/admin_secret")
 Port: 30010
@@ -330,7 +338,14 @@ export_ca() {
   if [ -n "$temporary" ] && docker cp "$caddy_id:/data/caddy/pki/authorities/local/root.crt" "$temporary" >/dev/null 2>&1; then
     chmod 0644 "$temporary"
     mv -f "$temporary" "$CA_EXPORT"
+    {
+      openssl x509 -in "$CA_EXPORT" -noout -fingerprint -sha256
+      printf 'PEM file SHA-256: '
+      sha256sum "$CA_EXPORT" | awk '{print $1}'
+    } >"$CA_FINGERPRINT"
+    chmod 0644 "$CA_FINGERPRINT"
     log "Private CA certificate exported to $CA_EXPORT"
+    log "Private CA SHA-256 fingerprint written to $CA_FINGERPRINT"
   fi
   return 0
 }
@@ -339,8 +354,14 @@ wait_for_service() {
   local attempt port="${APP_PORT:-30010}"
   log "Waiting for service to become healthy on port $port..."
   for attempt in $(seq 1 60); do
-    if curl -fsS --max-time 5 "http://127.0.0.1:${port}/health/ready" >/dev/null 2>&1 || \
-       curl -fsS --max-time 5 "http://${PUBLIC_HOST_INPUT}:${port}/health/ready" >/dev/null 2>&1; then
+    if [ "$TLS_MODE" = "ip" ]; then
+      [ -s "$CA_EXPORT" ] && \
+        curl -fsS --max-time 5 --cacert "$CA_EXPORT" \
+          "https://${PUBLIC_HOST_INPUT}:${port}/health/ready" >/dev/null 2>&1 && {
+        log "Service is live and ready on port $port!"
+        return 0
+      }
+    elif curl -fsS --max-time 5 "https://${PUBLIC_HOST_INPUT}/health/ready" >/dev/null 2>&1; then
       log "Service is live and ready on port $port!"
       return 0
     fi
@@ -370,7 +391,12 @@ deploy_stack() {
   fi
   wait_for_service
   compose ps
-  log "Deployment complete: http://$PUBLIC_HOST_INPUT:${APP_PORT:-30010}/"
+  if [ "$TLS_MODE" = "ip" ]; then
+    log "Deployment complete: https://$PUBLIC_HOST_INPUT:${APP_PORT:-30010}/"
+    log "Install $CA_EXPORT on clients only after verifying $CA_FINGERPRINT through a separate channel"
+  else
+    log "Deployment complete: https://$PUBLIC_HOST_INPUT/"
+  fi
   log "Admin credentials: $CREDENTIALS_FILE (root-readable only)"
 }
 
@@ -412,6 +438,9 @@ upgrade_stack() {
   compose build --pull api
   scan_application_image
   compose up -d --remove-orphans
+  if [ "$TLS_MODE" = "ip" ]; then
+    export_ca || true
+  fi
   wait_for_service
   log "Upgrade completed"
 }

@@ -1,9 +1,13 @@
 {
-	admin off
-	auto_https off
+	# Keep the admin API inside the Caddy container so future config changes can
+	# use graceful reloads. Port 2019 is not published by Docker Compose.
+	admin localhost:2019
+	auto_https disable_redirects
 }
 
-:30010 {
+https://{$PUBLIC_HOST}:30010 {
+	tls internal
+
 	encode zstd gzip
 
 	header {

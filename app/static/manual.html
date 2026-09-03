@@ -333,12 +333,29 @@
 
       <section class="docs-section" id="quickstart">
         <h2>1. 接入准备与快速验证</h2>
-        <p>当前客户测试环境 Base URL：<code>http://115.29.213.72:30010</code>。该地址仅用于当前联调；正式环境应使用项目方提供的 HTTPS 域名。</p>
+        <p>当前客户测试环境 Base URL：<code>https://115.29.213.72:30010</code>。调用地址必须使用该 IP，改用其他主机名会造成证书名称不匹配。</p>
         <p>客户需要准备 API Key；只有使用 Webhook 时才需要 Webhook Secret。两项凭据用途不同，不能互换。</p>
+        <h3>首次安装根证书</h3>
+        <p>本环境使用 CargoPlus 内部 CA 证书。首次调用前，先通过安全渠道取得 <code>caddy-root.crt</code>，再通过另一个渠道取得项目方提供的 SHA-256 校验信息。根证书用于建立连接信任，可以分发给调用端；API Key 用于业务鉴权，必须严格保密。</p>
+        <div class="code-block"><pre><code># Windows 当前用户：先核对文件 SHA-256，再导入受信任的根证书颁发机构
+certutil -hashfile .\caddy-root.crt SHA256
+certutil -user -addstore Root .\caddy-root.crt
+
+# Ubuntu / Debian
+sudo cp ./caddy-root.crt /usr/local/share/ca-certificates/cargoplus-caddy-root.crt
+sudo update-ca-certificates
+
+# Java：导入客户应用自己的 TrustStore
+keytool -importcert -alias cargoplus-ip-ca -file caddy-root.crt -keystore cargoplus-truststore.p12 -storetype PKCS12
+
+# Python requests 或 Node.js 未读取系统证书库时（PowerShell）
+$env:REQUESTS_CA_BUNDLE = "C:\证书目录\caddy-root.crt"
+$env:NODE_EXTRA_CA_CERTS = "C:\证书目录\caddy-root.crt"</code></pre></div>
+        <p>Linux 容器应把根证书复制到镜像的系统 CA 目录并执行对应发行版的证书更新命令；Java 应使用独立 TrustStore。证书导入后，请关闭并重新打开浏览器、PowerShell 或调用程序。</p>
         <h3>健康检查</h3>
-        <div class="code-block"><pre><code>curl "http://115.29.213.72:30010/health/ready"</code></pre></div>
+        <div class="code-block"><pre><code>curl "https://115.29.213.72:30010/health/ready"</code></pre></div>
         <p>准备就绪时返回 HTTP 200，且 <code>status=ready</code>、<code>database=ok</code>、<code>queue=ok</code>。</p>
-        <div class="notice-box warning"><strong>安全提示：</strong>当前测试地址暂使用 HTTP，只应使用测试专用 API Key、脱敏样本和可信电脑。不要在邮件、聊天、截图、代码仓库或日志中保存完整凭据。</div>
+        <div class="notice-box warning"><strong>禁止绕过校验：</strong>不得使用 <code>curl -k</code>、Python <code>verify=False</code> 或关闭 TLS 校验。未完成证书核验和信任安装前，不得上传真实业务文件。</div>
       </section>
 
       <section class="docs-section" id="auth">
@@ -478,7 +495,7 @@ X-Signature-SHA256: &lt;64 位十六进制签名&gt;</code></pre></div>
         <h2>10. 完整文件调用示例（Windows PowerShell）</h2>
         <p>以下流程完成：健康检查 → 安全输入 API Key → 上传文件 → 轮询任务 → 保存抽取结果。</p>
         <h3>10.1 设置参数</h3>
-        <div class="code-block"><pre><code>$baseUrl = "http://115.29.213.72:30010"
+        <div class="code-block"><pre><code>$baseUrl = "https://115.29.213.72:30010"
 $filePath = "C:\CargoPlusTest\sample.pdf"
 $recognitionMode = "standard"  # 扫描件可改为 high_accuracy
 

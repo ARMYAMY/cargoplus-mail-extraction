@@ -24,6 +24,10 @@ def test_customer_manual_contains_current_integration_flow():
         "Read-Host",
         "result_json",
         "error_message",
+        "https://115.29.213.72:30010",
+        "caddy-root.crt",
+        "certutil -user -addstore Root",
+        "不得使用 <code>curl -k</code>",
     ]
     for marker in required:
         assert marker in content
@@ -34,6 +38,7 @@ def test_customer_manual_does_not_restore_outdated_or_sensitive_examples():
 
     forbidden = [
         "http://localhost:8000",
+        "http://115.29.213.72:30010",
         "Skill V3",
         "cg_live_",
         "<code>SO</code>",
