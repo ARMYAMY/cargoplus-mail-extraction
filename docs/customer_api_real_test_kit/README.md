@@ -7,10 +7,12 @@
 - `Invoke-CargoPlusFileTest.ps1`：上传一个业务案例、自动轮询任务，并保存完整结果。
 - `Submit-CargoPlusFeedback.ps1`：在业务人员确认后提交字段纠错反馈。
 - `complete-gold-template.json`：完整 57 字段人工标准答案模板。
-- `宜运CargoPlus_API真实用例测试台账.xlsx`：案例、字段差异、执行日志、问题和统计台账。
+- `宜运CargoPlus_API真实用例测试台账.xlsx`：含测试Checklist、案例、字段差异、执行日志、问题和统计台账。
 - `宜运CargoPlus_API真实用例一周测试计划.docx`：对外执行计划和每日安排。
 
 ## 运行前检查
+
+请先打开Excel台账中的“测试Checklist”，逐项完成“测试准备”和“案例与金标准备”。只有必需项全部通过或经确认不适用，且没有未关闭P0问题时，才进入下一阶段。
 
 1. 确认测试链路属于双方认可的受控网络。如果请求经过不受控公共网络，不得向 HTTP 地址上传未脱敏文件。
 2. 在当前 PowerShell 窗口中设置 API Key，不要写入脚本、Excel、邮件或聊天：
