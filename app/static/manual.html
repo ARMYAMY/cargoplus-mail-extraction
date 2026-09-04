@@ -513,7 +513,7 @@ if ($health.status -ne "ready") { throw "服务尚未就绪" }</code></pre></div
         <h3>10.3 上传文件</h3>
         <div class="code-block"><pre><code>$idempotencyKey = [guid]::NewGuid().ToString()
 $curlArguments = @(
-    "-sS", "-X", "POST",
+    "-sS", "--ssl-revoke-best-effort", "-X", "POST",
     "$baseUrl/api/v1/extract/async/upload",
     "-H", "Authorization: Bearer $apiKey",
     "-H", "Idempotency-Key: $idempotencyKey",
@@ -528,6 +528,7 @@ if (-not $submitResult.task_id) { throw "服务器没有返回 task_id：$submit
 $taskId = $submitResult.task_id
 Write-Host "任务编号：" $taskId
 Write-Host "初始状态：" $submitResult.status</code></pre></div>
+        <div class="notice-box">Windows 自带的 <code>curl.exe</code> 可能无法联机检查内部 CA 证书的吊销状态，因此示例使用 <code>--ssl-revoke-best-effort</code>。该选项仍会校验证书链和服务器 IP，不等同于 <code>-k</code> 或关闭 TLS 验证。如上传命令报错，请立即停止，不要继续执行 <code>task_id</code> 查询步骤。</div>
         <h3>10.4 轮询直到完成</h3>
         <div class="code-block"><pre><code>$maximumWaitSeconds = 900
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()

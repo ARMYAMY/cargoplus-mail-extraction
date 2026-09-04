@@ -21,6 +21,7 @@ def test_customer_manual_contains_current_integration_flow():
         "最大 100MB",
         "最多处理 20 页",
         "[guid]::NewGuid().ToString()",
+        "--ssl-revoke-best-effort",
         "Read-Host",
         "result_json",
         "error_message",
